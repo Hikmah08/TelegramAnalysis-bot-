@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ICT/SMC AI Trading Copilot - Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background-color: #0b0f17; color: #f3f4f6; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    .card { background-color: #111827; border: 1px solid #1f2937; }
+  </style>
+</head>
+<body class="min-h-screen p-4 sm:p-6 lg:p-8">
+  <div class="max-w-7xl mx-auto space-y-6">
+    <!-- Header -->
+    <header class="flex flex-col md:flex-row justify-between items-start md:items-center pb-6 border-b border-gray-800 gap-4">
+      <div>
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-xl bg-blue-600/20 border border-blue-500/40 flex items-center justify-center text-blue-400 font-bold text-xl">⚡</div>
+          <div>
+            <h1 class="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+              ICT / SMC Trading Copilot
+              <span class="text-xs px-2.5 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Paper Trading Live</span>
+            </h1>
+            <p class="text-xs text-gray-400">High-confluence Institutional Liquidity & Structure Platform</p>
+          </div>
+        </div>
+      </div>
+      <div id="authStatus" class="flex items-center gap-3">
+        <span class="text-xs text-gray-400" id="userBadge">Connecting...</span>
+        <button onclick="refreshData()" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700">🔄 Refresh</button>
+      </div>
+    </header>
+
+    <!-- Metrics Bar -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="card p-5 rounded-xl">
+        <p class="text-xs font-medium text-gray-400 uppercase tracking-wider">Account Balance</p>
+        <h3 class="text-2xl font-bold text-white mt-1" id="balanceVal">$10,000.00</h3>
+        <p class="text-xs text-gray-500 mt-1">Starting: $10,000.00</p>
+      </div>
+      <div class="card p-5 rounded-xl">
+        <p class="text-xs font-medium text-gray-400 uppercase tracking-wider">Unrealized P&L</p>
+        <h3 class="text-2xl font-bold mt-1 text-gray-300" id="unrealizedVal">$0.00</h3>
+        <p class="text-xs text-gray-500 mt-1" id="equityVal">Equity: $10,000.00</p>
+      </div>
+      <div class="card p-5 rounded-xl">
+        <p class="text-xs font-medium text-gray-400 uppercase tracking-wider">Realized P&L</p>
+        <h3 class="text-2xl font-bold mt-1 text-gray-300" id="realizedVal">$0.00</h3>
+        <p class="text-xs text-gray-500 mt-1" id="tradesCount">0 Total Trades</p>
+      </div>
+      <div class="card p-5 rounded-xl">
+        <p class="text-xs font-medium text-gray-400 uppercase tracking-wider">System & Data Status</p>
+        <div class="flex items-center gap-2 mt-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span class="text-sm font-semibold text-emerald-400">Worker Edge Active</span>
+        </div>
+        <p class="text-xs text-gray-500 mt-1">1m Cron Live Monitoring</p>
+      </div>
+    </div>
+
+    <!-- Active Open Positions -->
+    <div class="card rounded-xl overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-800 flex justify-between items-center">
+        <h2 class="text-base font-semibold text-white">Open Paper Positions</h2>
+        <span class="text-xs text-gray-400" id="positionsBadge">0 active</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-sm">
+          <thead class="text-xs uppercase bg-gray-900/50 text-gray-400 border-b border-gray-800">
+            <tr>
+              <th class="px-6 py-3">ID & Symbol</th>
+              <th class="px-6 py-3">Direction</th>
+              <th class="px-6 py-3">Entry</th>
+              <th class="px-6 py-3">Mark Price</th>
+              <th class="px-6 py-3">Stop Loss</th>
+              <th class="px-6 py-3">Take Profit</th>
+              <th class="px-6 py-3">P&L ($ / R)</th>
+              <th class="px-6 py-3">Target %</th>
+              <th class="px-6 py-3 text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody id="positionsTableBody" class="divide-y divide-gray-800">
+            <tr>
+              <td colspan="9" class="px-6 py-8 text-center text-gray-500">No open positions. Use Telegram to generate or approve signals.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Closed Trade History -->
+    <div class="card rounded-xl overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-800">
+        <h2 class="text-base font-semibold text-white">Trade History (Closed Positions)</h2>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-sm">
+          <thead class="text-xs uppercase bg-gray-900/50 text-gray-400 border-b border-gray-800">
+            <tr>
+              <th class="px-6 py-3">Symbol</th>
+              <th class="px-6 py-3">Direction</th>
+              <th class="px-6 py-3">Entry</th>
+              <th class="px-6 py-3">Exit Price</th>
+              <th class="px-6 py-3">Exit Reason</th>
+              <th class="px-6 py-3">Final P&L</th>
+              <th class="px-6 py-3">Close Time</th>
+            </tr>
+          </thead>
+          <tbody id="historyTableBody" class="divide-y divide-gray-800">
+            <tr>
+              <td colspan="7" class="px-6 py-8 text-center text-gray-500">No closed trades recorded.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function initDashboard() {
+      // Check URL parameters for single-use token
+      const urlParams = new URLSearchParams(window.location.search);
+      const token = urlParams.get('token');
+
+      if (token) {
+        try {
+          const res = await fetch('/api/auth/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token }),
+            credentials: 'same-origin',
+          });
+          if (res.ok) {
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }
+        } catch (e) {
+          console.error('Failed to exchange token', e);
+        }
+      }
+
+      await refreshData();
+    }
+
+    async function refreshData() {
+      try {
+        const res = await fetch('/api/user/summary', { credentials: 'same-origin' });
+        if (res.status === 401) {
+          document.getElementById('userBadge').innerText = '🔒 Login via Telegram /dashboard';
+          return;
+        }
+
+        const data = await res.json();
+        document.getElementById('userBadge').innerText = `👤 User: ${data.user_id}`;
+
+        // Balance & P&L
+        const bal = data.balance?.current_balance || 10000;
+        const real = data.balance?.realized_pnl || 0;
+        let unreal = 0;
+
+        (data.positions || []).forEach(p => { unreal += (p.unrealized_pnl || 0); });
+
+        document.getElementById('balanceVal').innerText = `$${bal.toFixed(2)}`;
+        document.getElementById('realizedVal').innerText = `${real >= 0 ? '+' : ''}$${real.toFixed(2)}`;
+        document.getElementById('realizedVal').className = `text-2xl font-bold mt-1 ${real >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+        document.getElementById('unrealizedVal').innerText = `${unreal >= 0 ? '+' : ''}$${unreal.toFixed(2)}`;
+        document.getElementById('unrealizedVal').className = `text-2xl font-bold mt-1 ${unreal >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+        document.getElementById('equityVal').innerText = `Equity: $${(bal + unreal).toFixed(2)}`;
+        document.getElementById('tradesCount').innerText = `${data.balance?.total_trades || 0} Total Trades`;
+
+        // Render Positions
+        const posBody = document.getElementById('positionsTableBody');
+        const posList = data.positions || [];
+        document.getElementById('positionsBadge').innerText = `${posList.length} active`;
+
+        if (posList.length === 0) {
+          posBody.innerHTML = '<tr><td colspan="9" class="px-6 py-8 text-center text-gray-500">No open positions. Use Telegram to generate or approve signals.</td></tr>';
+        } else {
+          posBody.innerHTML = posList.map(p => `
+            <tr>
+              <td class="px-6 py-4 font-medium text-white">#${p.position_id} <code>${p.symbol}</code></td>
+              <td class="px-6 py-4"><span class="px-2 py-0.5 rounded text-xs ${p.direction === 'BULLISH' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}">${p.direction}</span></td>
+              <td class="px-6 py-4">${p.entry_price}</td>
+              <td class="px-6 py-4 font-semibold text-blue-400">${p.current_price || p.entry_price}</td>
+              <td class="px-6 py-4 text-rose-400">${p.stop_loss}</td>
+              <td class="px-6 py-4 text-emerald-400">${p.take_profit}</td>
+              <td class="px-6 py-4 font-bold ${p.unrealized_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">
+                ${p.unrealized_pnl >= 0 ? '+' : ''}$${(p.unrealized_pnl || 0).toFixed(2)} (${p.r_multiple || 0}R)
+              </td>
+              <td class="px-6 py-4">${p.target_progress_pct || 0}%</td>
+              <td class="px-6 py-4 text-right">
+                <span class="text-xs text-gray-500">Auto SL/TP</span>
+              </td>
+            </tr>
+          `).join('');
+        }
+
+        // Render History
+        const histBody = document.getElementById('historyTableBody');
+        const histList = data.history || [];
+        if (histList.length === 0) {
+          histBody.innerHTML = '<tr><td colspan="7" class="px-6 py-8 text-center text-gray-500">No closed trades recorded.</td></tr>';
+        } else {
+          histBody.innerHTML = histList.map(h => `
+            <tr>
+              <td class="px-6 py-4 font-medium text-white"><code>${h.symbol}</code></td>
+              <td class="px-6 py-4 text-xs ${h.direction === 'BULLISH' ? 'text-emerald-400' : 'text-rose-400'}">${h.direction}</td>
+              <td class="px-6 py-4">${h.entry_price}</td>
+              <td class="px-6 py-4 font-medium text-white">${h.exit_price || '-'}</td>
+              <td class="px-6 py-4"><span class="text-xs px-2 py-0.5 rounded bg-gray-800 text-gray-300">${h.exit_reason || '-'}</span></td>
+              <td class="px-6 py-4 font-bold ${h.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${h.pnl >= 0 ? '+' : ''}$${(h.pnl || 0).toFixed(2)}</td>
+              <td class="px-6 py-4 text-xs text-gray-400">${h.exit_time ? new Date(h.exit_time).toLocaleDateString() : '-'}</td>
+            </tr>
+          `).join('');
+        }
+      } catch (e) {
+        console.error('Error fetching dashboard summary:', e);
+      }
+    }
+
+    window.onload = initDashboard;
+  </script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+﻿.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+node_modules/
+dist/
+.wrangler/
+.venv/
+venv/
+pycache/
+*.pyc
+.pytest_cache/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# Local databases and backups
+backups/
+data/
+*.db.backup*
+trading_bot.db*
+*.sqlite*
+*.sqlite3
+
+# Python cache
+pycache/
+
+pycache/
+
+pycache/
+
+# Python cache
+pycache/
+pycache/
+
+# Temporary review archive
+cloudflare/source-review.zip

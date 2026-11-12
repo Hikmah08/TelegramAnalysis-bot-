@@ -1,0 +1,27 @@
+name = "trading-bot-worker"
+main = "src/index.ts"
+compatibility_date = "2026-11-04"
+compatibility_flags = ["nodejs_compat"]
+
+# Serve dashboard files from the public directory
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = true
+
+# D1 Database
+[[d1_databases]]
+binding = "DB"
+database_name = "trading-bot-db"
+database_id = "a85fcd07-aa51-41bf-a6ae-92fbd2af9fa8"
+migrations_dir = "migrations"
+
+# Monitor open paper positions every minute
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+DASHBOARD_URL = "https://trading-bot-worker.hikmahanalysisbot.workers.dev"
+DEFAULT_STARTING_BALANCE = "10000.0"
+MAX_OPEN_POSITIONS_PER_USER = "20"
+ENVIRONMENT = "production"

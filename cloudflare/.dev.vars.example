@@ -1,0 +1,16 @@
+# Cloudflare Worker & D1 Environment Template
+# Duplicate this file to .dev.vars or configure via `wrangler secret put <NAME>`
+
+# Telegram Bot Credentials
+TELEGRAM_BOT_TOKEN="your_telegram_bot_token_here"
+TELEGRAM_ADMIN_IDS="12345678,87654321"
+TELEGRAM_WEBHOOK_SECRET="random_secure_hex_or_alphanumeric_string_for_telegram_secret"
+
+# Web Dashboard Configuration
+DASHBOARD_URL="https://trading-bot-worker.<your-subdomain>.workers.dev"
+DASHBOARD_SECRET_KEY="random_secure_secret_key_for_signing_dashboard_sessions"
+
+# Application Settings
+DEFAULT_STARTING_BALANCE="10000.0"
+MAX_OPEN_POSITIONS_PER_USER="20"
+ENVIRONMENT="production"

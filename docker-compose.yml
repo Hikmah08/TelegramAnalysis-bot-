@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  # Web Dashboard service with Session Auth & Backtesting
+  dashboard:
+    build: .
+    container_name: trading_bot_dashboard
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_PATH=/app/data/trading_bot.db
+      - TELEGRAM_ADMIN_IDS=${TELEGRAM_ADMIN_IDS}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - DASHBOARD_URL=${DASHBOARD_URL:-http://localhost:8000}
+      - SECURE_COOKIES=${SECURE_COOKIES:-false}
+    volumes:
+      - bot_data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/auth/login-required"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Multi-User Telegram Copilot Bot Runner
+  telegram_bot:
+    build: .
+    container_name: trading_bot_telegram
+    restart: unless-stopped
+    command: ["python", "run_telegram_bot.py"]
+    environment:
+      - DATABASE_PATH=/app/data/trading_bot.db
+      - TELEGRAM_ADMIN_IDS=${TELEGRAM_ADMIN_IDS}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - DASHBOARD_URL=${DASHBOARD_URL:-http://localhost:8000}
+    volumes:
+      - bot_data:/app/data
+    depends_on:
+      - dashboard
+
+volumes:
+  bot_data:
+    driver: local

@@ -1,0 +1,89 @@
+# Cloudflare Worker & Pages Deployment Guide
+
+This directory houses the serverless cloud deployment of the ICT/SMC Trading Analysis Platform for Cloudflare Free Tier.
+
+## Architecture
+
+- **Compute**: Cloudflare Workers (TypeScript / V8)
+  - `src/index.ts`: Worker entry point, REST API, health check, session verification.
+  - `src/telegram.ts`: Telegram webhook endpoint (`POST /telegram/webhook`) handling user registration, `/start`, `/help`, `/menu`, balance, positions, history, watchlist, dashboard login, market snapshots (`/analyze`), and interactive trade management.
+  - `src/monitor.ts`: Scheduled position monitoring executed via Cron Trigger (`* * * * *`).
+  - `src/lifecycle.ts`: Paper trading P&L, R-multiple, target progress, and conservative SL/TP exit evaluations.
+  - `src/strategy.ts`: Port of ICT/SMC swing identification, liquidity sweep detection, and FVG detection.
+  - `src/market_data.ts`: Live price adapters for Binance Public API and Yahoo Finance.
+- **Database**: Cloudflare D1 (Serverless SQLite)
+  - Managed via versioned migrations in `migrations/` and `schema.sql`.
+- **Frontend**: Cloudflare Pages / Worker Site
+  - Mobile & desktop responsive HTML/Tailwind dashboard in `public/index.html`.
+
+---
+
+## Step-by-Step Deployment Instructions
+
+### 1. Prerequisites
+Ensure Node.js (v18+) is installed. Install Wrangler globally or use local `npx`:
+```bash
+npm install -g wrangler
+```
+
+### 2. Login to Cloudflare
+Authenticate Wrangler with your Cloudflare account:
+```bash
+wrangler login
+```
+
+### 3. Create Cloudflare D1 Database
+Create the production serverless SQLite database:
+```bash
+wrangler d1 create trading-bot-db
+```
+*Copy the `database_id` output by Wrangler and paste it into `wrangler.toml` under `[[d1_databases]]`.*
+
+### 4. Apply Database Migrations
+Execute the initial schema migration on your live D1 database:
+```bash
+wrangler d1 execute trading-bot-db --remote --file=./schema.sql
+```
+
+### 5. Set Production Secrets
+Safely configure secret tokens without storing them in Git:
+```bash
+wrangler secret put TELEGRAM_BOT_TOKEN
+wrangler secret put TELEGRAM_ADMIN_IDS
+wrangler secret put TELEGRAM_WEBHOOK_SECRET
+wrangler secret put DASHBOARD_SECRET_KEY
+```
+`TELEGRAM_WEBHOOK_SECRET` is required. Keep its value available for the manual
+webhook registration step below; the Worker rejects webhook requests when the
+secret is missing or does not match.
+
+### 6. Run Automated Tests Locally
+Verify the TypeScript and JavaScript modules pass all unit tests:
+```bash
+npm test
+```
+
+### 7. Deploy Worker & Dashboard
+Deploy the worker and public dashboard assets to Cloudflare:
+```bash
+wrangler deploy
+```
+*Note your live worker URL: `https://trading-bot-worker.<subdomain>.workers.dev`.*
+
+### 8. Set Up Telegram Webhook
+After deployment, manually point Telegram's webhook to your Worker URL. This
+project does not register the webhook automatically:
+```bash
+curl -X POST "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://trading-bot-worker.<subdomain>.workers.dev/telegram/webhook",
+    "secret_token": "<YOUR_TELEGRAM_WEBHOOK_SECRET>",
+    "allowed_updates": ["message", "callback_query"]
+  }'
+```
+
+### 9. Verify Deployment
+- Health check: `curl https://trading-bot-worker.<subdomain>.workers.dev/health`
+- Telegram bot: Send `/start` in your bot chat.
+- Dashboard: Send `/dashboard` in Telegram and open the returned login link.
