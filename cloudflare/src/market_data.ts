@@ -8,16 +8,71 @@ export interface PriceQuote {
   isStale: boolean;
 }
 
+interface CryptoPair {
+  base: string;
+  quote: string;
+  binanceSymbol: string;
+  coinbaseQuote: string;
+}
+
+interface ProviderResult {
+  quote: PriceQuote | null;
+  failure: string | null;
+}
+
+interface BinanceTicker {
+  lastPrice?: unknown;
+  highPrice?: unknown;
+  lowPrice?: unknown;
+  closeTime?: unknown;
+  msg?: unknown;
+}
+
+interface CoinbaseSpot {
+  data?: {
+    amount?: unknown;
+    base?: unknown;
+    currency?: unknown;
+  };
+  message?: unknown;
+}
+
+export class MarketDataError extends Error {
+  constructor(symbol: string, failures: string[]) {
+    super(`No crypto price available for ${symbol}. ${failures.join('; ')}`);
+    this.name = 'MarketDataError';
+  }
+}
+
 const CRYPTO_BASES = new Set([
   'BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'ADA', 'DOGE', 'TRX', 'AVAX', 'SHIB',
   'DOT', 'LINK', 'BCH', 'LTC', 'NEAR', 'UNI', 'ATOM', 'ETC', 'XLM', 'APT',
 ]);
 
-function resolveCryptoPair(symbol: string): string | null {
-  if (symbol.endsWith('USDT') || symbol.endsWith('BUSD')) {
-    return symbol;
+function resolveCryptoPair(symbol: string): CryptoPair | null {
+  for (const quote of ['USDT', 'BUSD', 'USD']) {
+    if (symbol.endsWith(quote)) {
+      const base = symbol.slice(0, -quote.length);
+      if (base && (quote !== 'USD' || CRYPTO_BASES.has(base))) {
+        return {
+          base,
+          quote,
+          binanceSymbol: symbol,
+          coinbaseQuote: quote,
+        };
+      }
+    }
   }
-  return CRYPTO_BASES.has(symbol) ? `${symbol}USDT` : null;
+
+  if (CRYPTO_BASES.has(symbol)) {
+    return {
+      base: symbol,
+      quote: 'USDT',
+      binanceSymbol: `${symbol}USDT`,
+      coinbaseQuote: 'USDT',
+    };
+  }
+  return null;
 }
 
 function sanitizeErrorDescription(value: unknown): string {
@@ -32,90 +87,182 @@ function sanitizeErrorDescription(value: unknown): string {
     .slice(0, 200);
 }
 
-function logProviderResult(
+function isJsonContentType(response: Response): boolean {
+  const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
+  return contentType === 'application/json' || Boolean(contentType?.endsWith('+json'));
+}
+
+function logProviderFailure(
   provider: string,
   requestedSymbol: string,
   httpStatus: number | null,
-  description: unknown
-): void {
+  description: string
+): string {
+  const safeDescription = sanitizeErrorDescription(description);
   console.warn('[Market data]', {
     provider,
     httpStatus,
     requestedSymbol,
-    description: sanitizeErrorDescription(description),
+    description: safeDescription,
   });
+  return `${provider}: ${httpStatus === null ? 'network error' : `HTTP ${httpStatus}`} (${safeDescription})`;
 }
 
-async function fetchBinancePrice(requestedSymbol: string, pair: string): Promise<PriceQuote | null> {
-  let response: Response;
-  try {
-    response = await fetch(
-      `https://api.binance.com/api/v3/ticker/24hr?symbol=${encodeURIComponent(pair)}`,
-      { headers: { 'User-Agent': 'CloudflareWorker-TradingBot/1.0' } }
+async function readJsonResponse<T>(
+  response: Response,
+  provider: string,
+  requestedSymbol: string,
+  errorDescription: (body: T) => unknown
+): Promise<{ body: T | null; failure: string | null }> {
+  if (!isJsonContentType(response)) {
+    const contentType = response.headers.get('content-type') || 'missing content type';
+    const failure = logProviderFailure(
+      provider,
+      requestedSymbol,
+      response.status,
+      `Expected JSON but received ${sanitizeErrorDescription(contentType)}`
     );
-  } catch {
-    logProviderResult('Binance', requestedSymbol, null, 'Network request failed');
-    return null;
+    return { body: null, failure };
   }
 
-  type BinanceTickerResponse = {
-    lastPrice?: unknown;
-    highPrice?: unknown;
-    lowPrice?: unknown;
-    closeTime?: unknown;
-    msg?: unknown;
-  };
-  let data: BinanceTickerResponse | null = null;
+  let body: T;
   try {
-    data = await response.json() as BinanceTickerResponse;
+    body = await response.json() as T;
   } catch {
-    logProviderResult('Binance', requestedSymbol, response.status, 'Malformed JSON response');
-    return null;
+    const failure = logProviderFailure(provider, requestedSymbol, response.status, 'Malformed JSON response');
+    return { body: null, failure };
   }
 
   if (!response.ok) {
-    logProviderResult('Binance', requestedSymbol, response.status, data?.msg);
-    return null;
+    const failure = logProviderFailure(provider, requestedSymbol, response.status, String(errorDescription(body) || 'Provider rejected request'));
+    return { body: null, failure };
   }
 
-  const price = Number(data?.lastPrice);
-  const high = Number(data?.highPrice);
-  const low = Number(data?.lowPrice);
-  const closeTime = Number(data?.closeTime);
+  return { body, failure: null };
+}
+
+async function fetchBinancePrice(requestedSymbol: string, pair: CryptoPair): Promise<ProviderResult> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://api.binance.com/api/v3/ticker/24hr?symbol=${encodeURIComponent(pair.binanceSymbol)}`,
+      { headers: { 'User-Agent': 'CloudflareWorker-TradingBot/1.0' } }
+    );
+  } catch {
+    return {
+      quote: null,
+      failure: logProviderFailure('Binance', requestedSymbol, null, 'Network request failed'),
+    };
+  }
+
+  const parsed = await readJsonResponse<BinanceTicker>(
+    response,
+    'Binance',
+    requestedSymbol,
+    body => body.msg
+  );
+  if (!parsed.body) {
+    return { quote: null, failure: parsed.failure };
+  }
+
+  const price = Number(parsed.body.lastPrice);
+  const high = Number(parsed.body.highPrice);
+  const low = Number(parsed.body.lowPrice);
+  const closeTime = Number(parsed.body.closeTime);
   if (!Number.isFinite(price) || price <= 0 ||
       !Number.isFinite(high) || !Number.isFinite(low) ||
       !Number.isFinite(closeTime) || closeTime <= 0) {
-    logProviderResult('Binance', requestedSymbol, response.status, 'Malformed ticker response fields');
-    return null;
-  }
-
-  const timestamp = new Date(closeTime);
-  if (!Number.isFinite(timestamp.getTime())) {
-    logProviderResult('Binance', requestedSymbol, response.status, 'Malformed ticker timestamp');
-    return null;
+    return {
+      quote: null,
+      failure: logProviderFailure('Binance', requestedSymbol, response.status, 'Malformed ticker response fields'),
+    };
   }
 
   return {
-    symbol: pair,
-    price,
-    high,
-    low,
-    timestamp: timestamp.toISOString(),
-    source: 'Binance Public',
-    isStale: false,
+    quote: {
+      symbol: pair.binanceSymbol,
+      price,
+      high,
+      low,
+      timestamp: new Date(closeTime).toISOString(),
+      source: 'Binance Public',
+      isStale: false,
+    },
+    failure: null,
+  };
+}
+
+async function fetchCoinbasePrice(requestedSymbol: string, pair: CryptoPair): Promise<ProviderResult> {
+  const coinbasePair = `${pair.base}-${pair.coinbaseQuote}`;
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://api.coinbase.com/v2/prices/${encodeURIComponent(coinbasePair)}/spot`
+    );
+  } catch {
+    return {
+      quote: null,
+      failure: logProviderFailure('Coinbase', requestedSymbol, null, 'Network request failed'),
+    };
+  }
+
+  const parsed = await readJsonResponse<CoinbaseSpot>(
+    response,
+    'Coinbase',
+    requestedSymbol,
+    body => body.message
+  );
+  if (!parsed.body) {
+    return { quote: null, failure: parsed.failure };
+  }
+
+  const data = parsed.body.data;
+  const price = Number(data?.amount);
+  if (data?.base !== pair.base || data?.currency !== pair.coinbaseQuote ||
+      !Number.isFinite(price) || price <= 0) {
+    return {
+      quote: null,
+      failure: logProviderFailure(
+        'Coinbase',
+        requestedSymbol,
+        response.status,
+        `Malformed spot response or unexpected quote currency (expected ${pair.base}-${pair.coinbaseQuote})`
+      ),
+    };
+  }
+
+  return {
+    quote: {
+      symbol: `${data.base}-${data.currency}`,
+      price,
+      timestamp: new Date().toISOString(),
+      source: 'Coinbase Public Spot',
+      isStale: false,
+    },
+    failure: null,
   };
 }
 
 export async function fetchCurrentPrice(symbol: string): Promise<PriceQuote | null> {
   const requestedSymbol = symbol.toUpperCase().trim();
   if (!/^[A-Z0-9._=-]{1,20}$/.test(requestedSymbol)) {
-    logProviderResult('symbol validation', requestedSymbol, null, 'Invalid market symbol format');
+    logProviderFailure('symbol validation', requestedSymbol, null, 'Invalid market symbol format');
     return null;
   }
 
   const cryptoPair = resolveCryptoPair(requestedSymbol);
   if (cryptoPair) {
-    return fetchBinancePrice(requestedSymbol, cryptoPair);
+    const primary = await fetchBinancePrice(requestedSymbol, cryptoPair);
+    if (primary.quote) {
+      return primary.quote;
+    }
+
+    const fallback = await fetchCoinbasePrice(requestedSymbol, cryptoPair);
+    if (fallback.quote) {
+      return fallback.quote;
+    }
+
+    throw new MarketDataError(requestedSymbol, [primary.failure!, fallback.failure!]);
   }
 
   let yahooSymbol = requestedSymbol;
@@ -138,34 +285,30 @@ export async function fetchCurrentPrice(symbol: string): Promise<PriceQuote | nu
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
     });
   } catch {
-    logProviderResult('Yahoo Finance', requestedSymbol, null, 'Network request failed');
+    logProviderFailure('Yahoo Finance', requestedSymbol, null, 'Network request failed');
     return null;
   }
 
-  let data: any;
-  try {
-    data = await response.json();
-  } catch {
-    logProviderResult('Yahoo Finance', requestedSymbol, response.status, 'Malformed JSON response');
+  const parsed = await readJsonResponse<any>(
+    response,
+    'Yahoo Finance',
+    requestedSymbol,
+    body => body?.chart?.error?.description
+  );
+  if (!parsed.body) {
     return null;
   }
 
-  if (!response.ok) {
-    logProviderResult('Yahoo Finance', requestedSymbol, response.status, data?.chart?.error?.description);
-    return null;
-  }
-
-  const result = data?.chart?.result?.[0];
-  const meta = result?.meta;
+  const meta = parsed.body?.chart?.result?.[0]?.meta;
   const currentPrice = Number(meta?.regularMarketPrice);
   const marketTime = Number(meta?.regularMarketTime);
   if (!Number.isFinite(currentPrice) || currentPrice <= 0 ||
       !Number.isFinite(marketTime) || marketTime <= 0) {
-    logProviderResult(
+    logProviderFailure(
       'Yahoo Finance',
       requestedSymbol,
       response.status,
-      data?.chart?.error?.description || 'Malformed chart response fields'
+      parsed.body?.chart?.error?.description || 'Malformed chart response fields'
     );
     return null;
   }

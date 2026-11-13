@@ -25,8 +25,16 @@ export async function runPositionMonitoring(env: Env): Promise<{
   const symbolMap = new Map<string, any>();
   for (const pos of positions) {
     if (!symbolMap.has(pos.symbol)) {
-      const quote = await fetchCurrentPrice(pos.symbol);
-      symbolMap.set(pos.symbol, quote);
+      try {
+        const quote = await fetchCurrentPrice(pos.symbol);
+        symbolMap.set(pos.symbol, quote);
+      } catch (error) {
+        if (!(error instanceof Error)) {
+          throw error;
+        }
+        errors.push(error.message);
+        symbolMap.set(pos.symbol, null);
+      }
     }
   }
 

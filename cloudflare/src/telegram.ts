@@ -1,5 +1,76 @@
 import { Env } from './types';
-import { fetchCurrentPrice } from './market_data';
+import {
+  fetchIctAnalysis,
+  formatIctOpportunity,
+  IctAnalysisError,
+} from './ict_analysis.js';
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>]/g, character => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+  })[character]!);
+}
+
+function opportunityKeyboard(signalId: string): object {
+  return {
+    inline_keyboard: [
+      [
+        { text: 'Enter Paper Trade', callback_data: `approve_${signalId}` },
+        { text: 'Accept', callback_data: `accept_${signalId}` },
+        { text: 'View Analysis', callback_data: `view_analysis_${signalId}` },
+      ],
+    ],
+  };
+}
+
+async function sendIctAnalysis(
+  symbol: string,
+  userId: string,
+  chatId: string | number,
+  botToken: string,
+  env: Env
+): Promise<void> {
+  const analysis = await fetchIctAnalysis(symbol);
+  if (analysis.opportunities.length === 0) {
+    await sendTelegramMessage(
+      botToken,
+      chatId,
+      `No qualified ICT/SMC setup is available for <code>${escapeHtml(symbol)}</code> right now.`
+    );
+    return;
+  }
+
+  const createdAt = new Date();
+  const expiresAt = new Date(createdAt.getTime() + 30 * 60 * 1000).toISOString();
+  for (const opportunity of analysis.opportunities) {
+    const signalId = crypto.randomUUID().replace(/-/g, '');
+    await env.DB.prepare(
+      `INSERT INTO signals_queue
+       (signal_id, user_id, symbol, direction, entry_price, stop_loss, take_profit, status, audit_notes, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)`
+    ).bind(
+      signalId,
+      userId,
+      symbol,
+      opportunity.direction,
+      opportunity.entryPrice,
+      opportunity.stopLoss,
+      opportunity.takeProfit,
+      JSON.stringify(opportunity.auditTrail),
+      createdAt.toISOString(),
+      expiresAt
+    ).run();
+
+    await sendTelegramMessage(
+      botToken,
+      chatId,
+      formatIctOpportunity(symbol, opportunity),
+      opportunityKeyboard(signalId)
+    );
+  }
+}
 
 export interface TelegramUpdate {
   update_id: number;
@@ -148,16 +219,185 @@ export async function handleTelegramUpdate(
     return new Response('TELEGRAM_BOT_TOKEN not configured', { status: 500 });
   }
 
-  // Handle callback queries (e.g. approve/reject or close position)
+  // Handle callback queries
   if (update.callback_query) {
     const cb = update.callback_query;
     const userId = String(cb.from.id);
     const chatId = cb.message?.chat.id || cb.from.id;
     const data = cb.data || '';
-    const callbackAction = data.startsWith('close_pos_') ? 'close_position' : 'unsupported';
+    const callbackAction = data.startsWith('close_pos_')
+      ? 'close_position'
+      : data === 'menu_analyze_menu'
+        ? 'analysis_menu'
+        : data.startsWith('analyze_pair_')
+          ? 'analyze_pair'
+          : data.startsWith('view_analysis_')
+            ? 'view_analysis'
+            : data.startsWith('approve_') || data.startsWith('accept_')
+              ? 'approve_trade'
+              : 'unsupported';
     console.info(`[Telegram] Received callback_query; action=${callbackAction}`);
 
-    if (data.startsWith('close_pos_')) {
+    let callbackAnswer = '';
+    let callbackAlert = false;
+    if (data === 'menu_analyze_menu') {
+      const watchlist = await env.DB.prepare(
+        'SELECT symbol FROM user_watchlist WHERE user_id = ? AND is_active = 1 ORDER BY symbol LIMIT 6'
+      ).bind(userId).all<{ symbol: string }>();
+      const symbols = Array.from(new Set([
+        'BTCUSDT',
+        'ETHUSDT',
+        ...(watchlist.results || []).map(item => item.symbol.toUpperCase()),
+      ])).slice(0, 8);
+      const keyboard = {
+        inline_keyboard: symbols.map(symbol => [{
+          text: symbol,
+          callback_data: `analyze_pair_${symbol}`,
+        }]),
+      };
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        'Select an instrument for full multi-timeframe ICT/SMC analysis. You can also send <code>/analyze SYMBOL</code>.',
+        keyboard
+      );
+      callbackAnswer = 'Choose an instrument.';
+    } else if (data.startsWith('analyze_pair_')) {
+      const symbol = data.slice('analyze_pair_'.length).toUpperCase();
+      if (!/^[A-Z0-9._=-]{1,20}$/.test(symbol)) {
+        callbackAnswer = 'Invalid instrument.';
+        callbackAlert = true;
+      } else {
+        try {
+          await sendIctAnalysis(symbol, userId, chatId, botToken, env);
+          callbackAnswer = 'Analysis complete.';
+        } catch (error) {
+          if (!(error instanceof IctAnalysisError)) throw error;
+          console.warn('[Telegram] ICT analysis unavailable', { symbol, description: error.message });
+          await sendTelegramMessage(botToken, chatId, escapeHtml(error.message));
+          callbackAnswer = 'Analysis data is unavailable.';
+          callbackAlert = true;
+        }
+      }
+    } else if (data.startsWith('view_analysis_')) {
+      const signalId = data.slice('view_analysis_'.length);
+      const signal = await env.DB.prepare(
+        'SELECT * FROM signals_queue WHERE signal_id = ? AND user_id = ?'
+      ).bind(signalId, userId).first<{
+        symbol: string;
+        direction: string;
+        entry_price: number;
+        stop_loss: number;
+        take_profit: number;
+        audit_notes: string | null;
+      }>();
+
+      if (!signal) {
+        callbackAnswer = 'Signal not found.';
+        callbackAlert = true;
+      } else {
+        const notes = JSON.parse(signal.audit_notes || '[]') as string[];
+        const notesText = notes.length
+          ? notes.map(note => `• ${escapeHtml(note)}`).join('\n')
+          : '• Multi-timeframe confluence confirmed.';
+        await sendTelegramMessage(
+          botToken,
+          chatId,
+          `🔬 <b>CONFLUENCE ANALYSIS: ${escapeHtml(signal.symbol)} ${escapeHtml(signal.direction)}</b>\n\n` +
+            `${notesText}\n\n` +
+            `<i>Entry: ${signal.entry_price.toFixed(2)} | SL: ${signal.stop_loss.toFixed(2)} | TP: ${signal.take_profit.toFixed(2)}</i>`
+        );
+        callbackAnswer = 'Analysis details loaded.';
+      }
+    } else if (data.startsWith('approve_') || data.startsWith('accept_')) {
+      const prefix = data.startsWith('approve_') ? 'approve_' : 'accept_';
+      const signalId = data.slice(prefix.length);
+      const signal = await env.DB.prepare(
+        'SELECT * FROM signals_queue WHERE signal_id = ? AND user_id = ?'
+      ).bind(signalId, userId).first<{
+        signal_id: string;
+        user_id: string;
+        symbol: string;
+        direction: string;
+        entry_price: number;
+        stop_loss: number;
+        take_profit: number;
+        status: string;
+        expires_at: string;
+      }>();
+
+      if (!signal) {
+        callbackAnswer = 'Signal not found.';
+        callbackAlert = true;
+      } else if (signal.status !== 'PENDING') {
+        callbackAnswer = signal.status === 'APPROVED'
+          ? 'Trade already approved.'
+          : `Signal is ${signal.status.toLowerCase()}.`;
+        callbackAlert = true;
+      } else if (Date.parse(signal.expires_at) <= Date.now()) {
+        await env.DB.prepare(
+          'UPDATE signals_queue SET status = ? WHERE signal_id = ? AND user_id = ? AND status = ?'
+        ).bind('EXPIRED', signalId, userId, 'PENDING').run();
+        callbackAnswer = 'Signal expired; market conditions may have changed.';
+        callbackAlert = true;
+      } else {
+        const riskSetting = await env.DB.prepare(
+          'SELECT value FROM user_settings WHERE user_id = ? AND key = ?'
+        ).bind(userId, 'risk_per_trade_pct').first<{ value: string }>();
+        const positionLimitSetting = await env.DB.prepare(
+          'SELECT value FROM user_settings WHERE user_id = ? AND key = ?'
+        ).bind(userId, 'max_open_positions').first<{ value: string }>();
+        const configuredRisk = Number(riskSetting?.value ?? 1);
+        const riskPct = Number.isFinite(configuredRisk) && configuredRisk > 0
+          ? configuredRisk
+          : 1;
+        const configuredMax = Number.parseInt(
+          positionLimitSetting?.value || env.MAX_OPEN_POSITIONS_PER_USER || '20',
+          10
+        );
+        const maxPositions = Number.isFinite(configuredMax) && configuredMax > 0 ? configuredMax : 20;
+        const nowIso = new Date().toISOString();
+        const results = await env.DB.batch([
+          env.DB.prepare(
+            `UPDATE signals_queue SET status = 'APPROVED'
+             WHERE signal_id = ? AND user_id = ? AND status = 'PENDING' AND expires_at > ?
+               AND entry_price != stop_loss
+               AND (SELECT COUNT(*) FROM paper_positions WHERE user_id = ? AND status = 'OPEN') < ?
+               AND EXISTS (SELECT 1 FROM user_balances WHERE user_id = ? AND current_balance > 0)`
+          ).bind(signalId, userId, nowIso, userId, maxPositions, userId),
+          env.DB.prepare(
+            `INSERT INTO paper_positions
+             (user_id, symbol, direction, entry_price, stop_loss, take_profit, position_size, status, entry_time,
+              fee_paid, current_price, unrealized_pnl, r_multiple, target_progress_pct, last_price_time, initial_risk)
+             SELECT s.user_id, s.symbol, s.direction, s.entry_price, s.stop_loss, s.take_profit,
+                    (b.current_balance * ? / 100.0) / ABS(s.entry_price - s.stop_loss),
+                    'OPEN', ?, 0, s.entry_price, 0, 0, 0, ?, ABS(s.entry_price - s.stop_loss)
+             FROM signals_queue s JOIN user_balances b ON b.user_id = s.user_id
+             WHERE s.signal_id = ? AND s.user_id = ? AND s.status = 'APPROVED' AND changes() = 1
+               AND (SELECT COUNT(*) FROM paper_positions WHERE user_id = ? AND status = 'OPEN') < ?`
+          ).bind(riskPct, nowIso, nowIso, signalId, userId, userId, maxPositions),
+        ]);
+        const claimed = results[0]?.meta?.changes === 1;
+        const positionOpened = results[1]?.meta?.changes === 1;
+        if (claimed && positionOpened) {
+          callbackAnswer = 'Virtual paper trade executed.';
+          await sendTelegramMessage(
+            botToken,
+            chatId,
+            `✅ <b>PAPER TRADE ENTERED</b>\n\n` +
+              `• <b>Symbol:</b> ${escapeHtml(signal.symbol)}\n` +
+              `• <b>Direction:</b> ${signal.direction === 'BULLISH' ? 'LONG' : 'SHORT'}\n` +
+              `• <b>Entry:</b> ${signal.entry_price.toFixed(2)}\n` +
+              `• <b>Stop Loss:</b> ${signal.stop_loss.toFixed(2)}\n` +
+              `• <b>Take Profit (4:1):</b> ${signal.take_profit.toFixed(2)}\n` +
+              `<i>Virtual paper trading only.</i>`
+          );
+        } else {
+          callbackAnswer = 'Trade could not be opened; the signal may be expired or your open-position limit reached.';
+          callbackAlert = true;
+        }
+      }
+    } else if (data.startsWith('close_pos_')) {
       const posId = parseInt(data.replace('close_pos_', ''), 10);
       // Verify ownership and close position
       const posResult = await env.DB.prepare(
@@ -201,7 +441,12 @@ export async function handleTelegramUpdate(
       }
     }
 
-    await callTelegramApi(botToken, 'answerCallbackQuery', { callback_query_id: cb.id });
+    const callbackPayload: Record<string, unknown> = { callback_query_id: cb.id };
+    if (callbackAnswer) {
+      callbackPayload.text = callbackAnswer;
+      callbackPayload.show_alert = callbackAlert;
+    }
+    await callTelegramApi(botToken, 'answerCallbackQuery', callbackPayload);
     return new Response(JSON.stringify({ ok: true }), {
       headers: { 'Content-Type': 'application/json' },
     });
@@ -251,32 +496,31 @@ export async function handleTelegramUpdate(
       `• /history - View closed paper trades\n` +
       `• /watchlist - View your monitored watchlist\n` +
       `• /dashboard - One-click secure login token for Web Dashboard\n` +
-      `• /analyze SYMBOL - View a current market price snapshot\n` +
+      `• /analyze SYMBOL - Run full multi-timeframe ICT/SMC analysis\n` +
       `• /menu - Display this command overview\n` +
       `• /help - Display this command overview\n\n` +
       `<i>Real-money trading is disabled. All positions run in isolated paper-trading simulation.</i>`;
-    await sendTelegramMessage(botToken, chatId, welcome);
+    await sendTelegramMessage(botToken, chatId, welcome, {
+      inline_keyboard: [[{ text: 'Analysis', callback_data: 'menu_analyze_menu' }]],
+    });
   } else if (command === '/analyze' || command === '/scan') {
     const symbol = commandArgs[0]?.toUpperCase();
     if (!symbol) {
-      await sendTelegramMessage(botToken, chatId, 'Usage: <code>/analyze SYMBOL</code>\nExample: <code>/analyze BTCUSDT</code>');
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        'Usage: <code>/analyze SYMBOL</code>\nExample: <code>/analyze BTCUSDT</code>',
+        { inline_keyboard: [[{ text: 'Analysis', callback_data: 'menu_analyze_menu' }]] }
+      );
     } else if (!/^[A-Z0-9._=-]{1,20}$/.test(symbol)) {
       await sendTelegramMessage(botToken, chatId, 'Invalid symbol. Use letters and numbers, for example <code>BTCUSDT</code> or <code>EURUSD</code>.');
     } else {
-      const quote = await fetchCurrentPrice(symbol);
-      if (!quote) {
-        await sendTelegramMessage(botToken, chatId, `No current market price is available for <code>${symbol}</code>.`);
-      } else {
-        const staleNote = quote.isStale ? '\n⚠️ This quote may be stale.' : '';
-        await sendTelegramMessage(
-          botToken,
-          chatId,
-          `📈 <b>Market Snapshot: ${quote.symbol}</b>\n` +
-            `Current price: <b>${quote.price}</b>\n` +
-            `Day high: ${quote.high ?? 'N/A'} | Day low: ${quote.low ?? 'N/A'}\n` +
-            `Source: ${quote.source}\n` +
-            `Updated: ${quote.timestamp}${staleNote}`
-        );
+      try {
+        await sendIctAnalysis(symbol, userId, chatId, botToken, env);
+      } catch (error) {
+        if (!(error instanceof IctAnalysisError)) throw error;
+        console.warn('[Telegram] ICT analysis unavailable', { symbol, description: error.message });
+        await sendTelegramMessage(botToken, chatId, escapeHtml(error.message));
       }
     }
   } else if (command === '/balance' || command === '/account' || command === '/performance') {

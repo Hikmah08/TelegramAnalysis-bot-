@@ -1,7 +1,7 @@
 import { Env } from './types';
 import { handleTelegramUpdate, hashDashboardToken } from './telegram';
 import { runPositionMonitoring } from './monitor';
-import { fetchCurrentPrice } from './market_data';
+import { fetchCurrentPrice, MarketDataError } from './market_data';
 
 export default {
   // 1. HTTP Request Handler (REST API, Webhook, Dashboard API)
@@ -147,10 +147,20 @@ export default {
     // Market Price Test
     if (path.startsWith('/api/market/quote/')) {
       const sym = path.replace('/api/market/quote/', '');
-      const quote = await fetchCurrentPrice(sym);
-      return new Response(JSON.stringify(quote || { error: 'Not found' }), {
-        headers: { 'Content-Type': 'application/json' },
-      });
+      try {
+        const quote = await fetchCurrentPrice(sym);
+        return new Response(JSON.stringify(quote || { error: 'Not found' }), {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      } catch (error) {
+        if (!(error instanceof MarketDataError)) {
+          throw error;
+        }
+        return new Response(JSON.stringify({ error: error.message }), {
+          status: 502,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
     }
 
     return env.ASSETS.fetch(request);

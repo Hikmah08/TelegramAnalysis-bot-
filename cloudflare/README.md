@@ -6,11 +6,12 @@ This directory houses the serverless cloud deployment of the ICT/SMC Trading Ana
 
 - **Compute**: Cloudflare Workers (TypeScript / V8)
   - `src/index.ts`: Worker entry point, REST API, health check, session verification.
-  - `src/telegram.ts`: Telegram webhook endpoint (`POST /telegram/webhook`) handling user registration, `/start`, `/help`, `/menu`, balance, positions, history, watchlist, dashboard login, market snapshots (`/analyze`), and interactive trade management.
+  - `src/telegram.ts`: Telegram webhook endpoint (`POST /telegram/webhook`) handling user registration, `/start`, `/help`, `/menu`, balance, positions, history, watchlist, dashboard login, full multi-timeframe ICT/SMC analysis (`/analyze`), and interactive trade management.
   - `src/monitor.ts`: Scheduled position monitoring executed via Cron Trigger (`* * * * *`).
   - `src/lifecycle.ts`: Paper trading P&L, R-multiple, target progress, and conservative SL/TP exit evaluations.
   - `src/strategy.ts`: Port of ICT/SMC swing identification, liquidity sweep detection, and FVG detection.
   - `src/market_data.ts`: Live price adapters for Binance Public API and Yahoo Finance.
+  - `src/ict_analysis.js`: Multi-timeframe candle pipeline (Binance, Coinbase Exchange, then Kraken) for 4H, 1H, 15M, 5M, and 1M analysis. Kraken symbols use exchange-specific names (for example BTCUSDT maps to XBTUSDT); provider candles are validated, closed, ordered, and normalized before analysis. Coinbase's Exchange API does not support 4H candle granularity, so 4H falls through to Kraken.
 - **Database**: Cloudflare D1 (Serverless SQLite)
   - Managed via versioned migrations in `migrations/` and `schema.sql`.
 - **Frontend**: Cloudflare Pages / Worker Site
