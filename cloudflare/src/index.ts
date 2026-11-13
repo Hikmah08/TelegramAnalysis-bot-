@@ -1,5 +1,5 @@
 import { Env } from './types';
-import { handleTelegramUpdate, hashDashboardToken } from './telegram';
+import { handleTelegramUpdate, hashDashboardToken, registerTelegramCommands } from './telegram';
 import { runPositionMonitoring } from './monitor';
 import { fetchCurrentPrice, MarketDataError } from './market_data';
 import { handleDashboardRequest } from './dashboard.js';
@@ -61,6 +61,12 @@ export default {
       try {
         const update = await request.json() as any;
         console.info('[Telegram] Webhook update parsed; forwarding to update handler');
+        if (env.TELEGRAM_BOT_TOKEN) {
+          ctx.waitUntil(registerTelegramCommands(
+            env.TELEGRAM_BOT_TOKEN,
+            env.TELEGRAM_ADMIN_IDS || ''
+          ));
+        }
         return await handleTelegramUpdate(update, env);
       } catch (err: any) {
         console.error('[Telegram] Webhook update processing failed');

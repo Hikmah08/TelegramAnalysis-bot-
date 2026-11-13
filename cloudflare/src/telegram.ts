@@ -12,6 +12,24 @@ import {
 
 const WATCHLIST_LIMIT = 20;
 const PENDING_FLOW_KEY = 'telegram_pending_flow';
+const TELEGRAM_NORMAL_COMMANDS = [
+  { command: 'start', description: 'Start the bot' },
+  { command: 'help', description: 'Show help' },
+  { command: 'menu', description: 'Open the main menu' },
+  { command: 'price', description: 'Check a live market price' },
+  { command: 'analyze', description: 'Analyze a trading pair' },
+  { command: 'scan', description: 'Scan a trading pair' },
+  { command: 'balance', description: 'View account balance' },
+  { command: 'account', description: 'View account summary' },
+  { command: 'performance', description: 'View trading performance' },
+  { command: 'positions', description: 'View open positions' },
+  { command: 'history', description: 'View trade history' },
+  { command: 'watchlist', description: 'Manage your watchlist' },
+  { command: 'dashboard', description: 'Open trading dashboard' },
+];
+const TELEGRAM_ADMIN_COMMAND = { command: 'admin', description: 'Open admin dashboard' };
+const TELEGRAM_ADMIN_COMMANDS = [...TELEGRAM_NORMAL_COMMANDS, TELEGRAM_ADMIN_COMMAND];
+const commandRegistrationPromises = new Map<string, Promise<boolean>>();
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>]/g, character => ({
@@ -399,6 +417,52 @@ async function callTelegramApi(
 export async function diagnoseTelegramBotToken(botToken: string): Promise<boolean> {
   const result = await callTelegramApi(botToken, 'getMe', {});
   return result.ok;
+}
+
+export function registerTelegramCommands(
+  botToken: string,
+  authorizedAdminIds = ''
+): Promise<boolean> {
+  const adminIds = Array.from(new Set(authorizedAdminIds
+    .split(',')
+    .map(id => id.trim())
+    .filter(id => /^[1-9]\d*$/.test(id))))
+    .sort();
+  const registrationKey = adminIds.join(',');
+  const existingRegistration = commandRegistrationPromises.get(registrationKey);
+  if (existingRegistration) return existingRegistration;
+
+  const registration = (async () => {
+    let allSucceeded = true;
+    const defaultResult = await callTelegramApi(botToken, 'setMyCommands', {
+      commands: TELEGRAM_NORMAL_COMMANDS,
+      scope: { type: 'default' },
+    });
+    allSucceeded = defaultResult.ok && allSucceeded;
+
+    for (const adminId of adminIds) {
+      const adminResult = await callTelegramApi(botToken, 'setMyCommands', {
+        commands: TELEGRAM_ADMIN_COMMANDS,
+        scope: { type: 'chat', chat_id: adminId },
+      });
+      allSucceeded = adminResult.ok && allSucceeded;
+    }
+
+    if (allSucceeded) {
+      console.info('[Telegram] Bot command menus registered');
+    } else {
+      console.error('[Telegram] One or more bot command menus could not be registered');
+      commandRegistrationPromises.delete(registrationKey);
+    }
+    return allSucceeded;
+  })().catch(() => {
+    console.error('[Telegram] Bot command registration failed before receiving a Telegram response');
+    commandRegistrationPromises.delete(registrationKey);
+    return false;
+  });
+
+  commandRegistrationPromises.set(registrationKey, registration);
+  return registration;
 }
 
 export async function sendTelegramMessage(

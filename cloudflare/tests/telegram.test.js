@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { diagnoseTelegramBotToken, handleTelegramUpdate, sendTelegramMessage } from '../src/telegram.js';
+import {
+  diagnoseTelegramBotToken,
+  handleTelegramUpdate,
+  registerTelegramCommands,
+  sendTelegramMessage,
+} from '../src/telegram.js';
 
 // Mock in-memory D1 implementation
 class MockD1 {
@@ -198,6 +203,77 @@ class MockD1 {
     ];
   }
 }
+
+test('default Telegram command menu excludes /admin', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url, payload: JSON.parse(options.body) });
+    return Response.json({ ok: true, result: true });
+  };
+  try {
+    assert.equal(await registerTelegramCommands('12345:MOCK_TOKEN_SECRET', ''), true);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].payload.scope.type, 'default');
+    assert.equal(requests[0].payload.commands.some(command => command.command === 'admin'), false);
+    assert.deepEqual(requests[0].payload.commands.map(command => command.command), [
+      'start', 'help', 'menu', 'price', 'analyze', 'scan', 'balance',
+      'account', 'performance', 'positions', 'history', 'watchlist', 'dashboard',
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('authorized Telegram admin receives /admin only in their private-chat command scope', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url, payload: JSON.parse(options.body) });
+    return Response.json({ ok: true, result: true });
+  };
+  try {
+    assert.equal(await registerTelegramCommands('12345:MOCK_TOKEN_SECRET', '8675309'), true);
+    assert.equal(requests.length, 2);
+    assert.deepEqual(requests[0].payload.scope, { type: 'default' });
+    assert.equal(requests[0].payload.commands.some(command => command.command === 'admin'), false);
+    assert.deepEqual(requests[1].payload.scope, { type: 'chat', chat_id: '8675309' });
+    assert.deepEqual(
+      requests[1].payload.commands.find(command => command.command === 'admin'),
+      { command: 'admin', description: 'Open admin dashboard' }
+    );
+    assert.equal(requests[1].payload.commands.length, requests[0].payload.commands.length + 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('multiple authorized Telegram admins each receive a private-chat /admin command scope', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url, payload: JSON.parse(options.body) });
+    return Response.json({ ok: true, result: true });
+  };
+  try {
+    assert.equal(await registerTelegramCommands('12345:MOCK_TOKEN_SECRET', '112233, 445566, nope, 112233'), true);
+    assert.equal(requests.length, 3);
+    assert.deepEqual(requests.map(request => request.payload.scope), [
+      { type: 'default' },
+      { type: 'chat', chat_id: '112233' },
+      { type: 'chat', chat_id: '445566' },
+    ]);
+    assert.equal(requests[0].payload.commands.some(command => command.command === 'admin'), false);
+    for (const request of requests.slice(1)) {
+      assert.deepEqual(
+        request.payload.commands.find(command => command.command === 'admin'),
+        { command: 'admin', description: 'Open admin dashboard' }
+      );
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 function flatBinanceCandles(interval = '1m', count = 150) {
   const intervalMs = {
@@ -951,8 +1027,10 @@ test('Telegram /admin only issues an administrator link to an allowlisted ID', a
   };
   const originalFetch = globalThis.fetch;
   let reply = '';
+  let replySentAt = 0;
   globalThis.fetch = async (_url, options) => {
     reply = JSON.parse(options.body).text;
+    replySentAt = Date.now();
     return Response.json({ ok: true });
   };
   try {
@@ -972,6 +1050,11 @@ test('Telegram /admin only issues an administrator link to an allowlisted ID', a
     const tokenHash = createHash('sha256').update(rawToken).digest('hex');
     assert.equal(db.tables.dashboard_auth_tokens.has(tokenHash), true);
     assert.equal(db.tables.dashboard_auth_tokens.has(rawToken), false);
+    const storedToken = db.tables.dashboard_auth_tokens.get(tokenHash);
+    const expiresAt = Date.parse(storedToken.expiresAt);
+    const expiresIn = expiresAt - replySentAt;
+    assert.ok(expiresIn <= 15 * 60 * 1000);
+    assert.ok(expiresIn > 15 * 60 * 1000 - 1000);
     assert.equal(db.tables.users.get('654321').role, 'ADMIN');
   } finally {
     globalThis.fetch = originalFetch;
