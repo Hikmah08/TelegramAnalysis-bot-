@@ -2,6 +2,7 @@ import { Env } from './types';
 import { handleTelegramUpdate, hashDashboardToken } from './telegram';
 import { runPositionMonitoring } from './monitor';
 import { fetchCurrentPrice, MarketDataError } from './market_data';
+import { handleDashboardRequest } from './dashboard.js';
 
 export default {
   // 1. HTTP Request Handler (REST API, Webhook, Dashboard API)
@@ -33,6 +34,9 @@ export default {
       );
     }
 
+    const dashboardResponse = await handleDashboardRequest(request, env, hashDashboardToken);
+    if (dashboardResponse) return dashboardResponse;
+
     // Telegram Webhook Endpoint
     if (path === '/telegram/webhook' && request.method === 'POST') {
       const webhookSecret = env.TELEGRAM_WEBHOOK_SECRET;
@@ -61,83 +65,6 @@ export default {
           headers: { 'Content-Type': 'application/json' },
         });
       }
-    }
-
-    // Dashboard REST API: Session Token Exchange
-    if (path === '/api/auth/token' && request.method === 'POST') {
-      try {
-        const body = await request.json() as unknown;
-        const token = typeof body === 'object' && body !== null && 'token' in body ? body.token : undefined;
-        if (typeof token !== 'string' || token.length === 0) {
-          return new Response(JSON.stringify({ error: 'Missing token' }), { status: 400 });
-        }
-
-        const nowIso = new Date().toISOString();
-        const tokenHash = await hashDashboardToken(token);
-        const tokenRecord = await env.DB.prepare(
-          'UPDATE dashboard_auth_tokens SET is_used = 1 WHERE token_hash = ? AND is_used = 0 AND expires_at > ? RETURNING user_id'
-        ).bind(tokenHash, nowIso).first<{ user_id: string }>();
-
-        if (!tokenRecord) {
-          return new Response(JSON.stringify({ error: 'Invalid or expired token' }), { status: 401 });
-        }
-
-        const sessionId = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
-        const sessionExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(); // 7 days
-
-        await env.DB.prepare(
-          'INSERT INTO dashboard_sessions (session_id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)'
-        ).bind(sessionId, tokenRecord.user_id, nowIso, sessionExpiry).run();
-
-        return new Response(JSON.stringify({ ok: true }), {
-          headers: {
-            'Content-Type': 'application/json',
-            'Set-Cookie': `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=604800`,
-          },
-        });
-      } catch (error) {
-        console.error('Dashboard token exchange failed:', error);
-        return new Response(JSON.stringify({ error: 'Unable to exchange dashboard token' }), { status: 500 });
-      }
-    }
-
-    // Dashboard REST API: Authenticated User Data
-    if (path === '/api/user/summary' && request.method === 'GET') {
-      const cookie = request.headers.get('Cookie') || '';
-      const sessionId = cookie.match(/(?:^|;\s*)session_id=([a-f0-9]{64})(?:;|$)/i)?.[1] || '';
-
-      if (!sessionId) {
-        return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
-      }
-
-      const nowIso = new Date().toISOString();
-      const session = await env.DB.prepare(
-        'SELECT * FROM dashboard_sessions WHERE session_id = ? AND expires_at > ?'
-      ).bind(sessionId, nowIso).first() as any;
-
-      if (!session) {
-        return new Response(JSON.stringify({ error: 'Session expired or invalid' }), { status: 401 });
-      }
-
-      const userId = session.user_id;
-
-      // Query isolated multi-user tables
-      const balance = await env.DB.prepare('SELECT * FROM user_balances WHERE user_id = ?').bind(userId).first();
-      const positions = await env.DB.prepare('SELECT * FROM paper_positions WHERE user_id = ? AND status = "OPEN"').bind(userId).all();
-      const history = await env.DB.prepare('SELECT * FROM paper_positions WHERE user_id = ? AND status != "OPEN" ORDER BY exit_time DESC LIMIT 50').bind(userId).all();
-      const watchlist = await env.DB.prepare('SELECT * FROM user_watchlist WHERE user_id = ? AND is_active = 1').bind(userId).all();
-
-      return new Response(
-        JSON.stringify({
-          user_id: userId,
-          balance: balance || { starting_balance: 10000, current_balance: 10000, realized_pnl: 0 },
-          positions: positions.results || [],
-          history: history.results || [],
-          watchlist: watchlist.results || [],
-          timestamp: nowIso,
-        }),
-        { headers: { 'Content-Type': 'application/json' } }
-      );
     }
 
     if (path === '/api/cron/trigger' && request.method === 'POST') {

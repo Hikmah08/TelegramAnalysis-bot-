@@ -1,224 +1,466 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ICT/SMC AI Trading Copilot - Dashboard</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a0a0b">
+  <meta name="referrer" content="strict-origin">
+  <title>Trading Copilot — Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    body { background-color: #0b0f17; color: #f3f4f6; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
-    .card { background-color: #111827; border: 1px solid #1f2937; }
+    :root {
+      color-scheme: dark;
+      font-family: Inter, Geist, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+      --bg: #0a0a0b;
+      --panel: #111113;
+      --panel-raised: #171719;
+      --border: #29292d;
+      --border-soft: #202023;
+      --text: #f4f4f5;
+      --muted: #a1a1aa;
+      --subtle: #71717a;
+      --positive: #a7f3d0;
+      --negative: #fda4af;
+      --radius: 14px;
+      background: var(--bg);
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; background: var(--bg); color: var(--text); font-size: 14px; }
+    button, a { font: inherit; }
+    button { color: inherit; }
+    .shell { min-height: 100vh; }
+    .sidebar {
+      position: fixed; inset: 0 auto 0 0; z-index: 4; display: flex; width: 232px; flex-direction: column;
+      border-right: 1px solid var(--border-soft); background: #0d0d0e; padding: 22px 14px;
+    }
+    .brand { display: flex; align-items: center; gap: 11px; padding: 0 8px 26px; }
+    .brand-mark {
+      display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid #444448;
+      border-radius: 10px; background: #202023; color: #fff; font-size: 13px; font-weight: 700;
+    }
+    .brand-name { font-size: 13px; font-weight: 600; letter-spacing: -.02em; }
+    .brand-caption { margin-top: 3px; color: var(--subtle); font-size: 10px; }
+    .nav-label { padding: 13px 10px 8px; color: var(--subtle); font-size: 10px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; }
+    .nav { display: grid; gap: 4px; }
+    .nav a {
+      display: flex; align-items: center; gap: 11px; min-height: 40px; padding: 0 11px; border: 1px solid transparent;
+      border-radius: 9px; color: var(--muted); text-decoration: none; transition: background .15s, color .15s;
+    }
+    .nav a:hover, .nav a.active { border-color: var(--border-soft); background: #1a1a1c; color: var(--text); }
+    .nav-icon { display: inline-grid; width: 17px; place-items: center; color: #898990; font-size: 14px; }
+    .sidebar-footer { margin-top: auto; padding: 14px 10px 2px; border-top: 1px solid var(--border-soft); color: var(--subtle); font-size: 11px; line-height: 1.6; }
+    .workspace { min-height: 100vh; margin-left: 232px; }
+    .topbar {
+      position: sticky; top: 0; z-index: 3; display: flex; min-height: 70px; align-items: center; justify-content: space-between;
+      gap: 16px; border-bottom: 1px solid var(--border-soft); background: rgb(10 10 11 / 92%); padding: 14px 34px; backdrop-filter: blur(12px);
+    }
+    .topbar-title { font-size: 15px; font-weight: 600; letter-spacing: -.02em; }
+    .topbar-subtitle { margin-top: 4px; color: var(--subtle); font-size: 11px; }
+    .top-actions { display: flex; align-items: center; gap: 12px; }
+    .user-badge { max-width: 240px; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+    .button {
+      display: inline-flex; min-height: 36px; align-items: center; justify-content: center; gap: 8px; border: 1px solid #3a3a3e;
+      border-radius: 9px; background: #1c1c1f; padding: 0 12px; color: var(--text); cursor: pointer; font-size: 12px; font-weight: 500;
+    }
+    .button:hover { border-color: #58585e; background: #252528; }
+    .button:disabled { cursor: wait; opacity: .6; }
+    main { width: min(1480px, 100%); margin: 0 auto; padding: 30px 34px 48px; }
+    .page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 23px; }
+    h1 { margin: 0; font-size: clamp(22px, 2vw, 28px); font-weight: 600; letter-spacing: -.045em; }
+    .page-description { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .updated { color: var(--subtle); font-size: 11px; white-space: nowrap; }
+    .section { scroll-margin-top: 88px; margin-top: 24px; }
+    .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    .section-heading h2 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -.015em; }
+    .section-note, .count { color: var(--subtle); font-size: 11px; }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .metric, .card { min-width: 0; border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--panel); }
+    .metric { padding: 17px 18px; }
+    .metric-label { color: var(--muted); font-size: 11px; font-weight: 500; }
+    .metric-value { margin-top: 11px; overflow: hidden; font-size: clamp(20px, 2vw, 26px); font-weight: 600; letter-spacing: -.04em; text-overflow: ellipsis; white-space: nowrap; }
+    .metric-foot { margin-top: 7px; color: var(--subtle); font-size: 11px; }
+    .positive { color: var(--positive) !important; }
+    .negative { color: var(--negative) !important; }
+    .stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .stat { border: 1px solid var(--border-soft); border-radius: 12px; background: #101012; padding: 15px 16px; }
+    .stat-label { color: var(--subtle); font-size: 10px; font-weight: 500; letter-spacing: .04em; text-transform: uppercase; }
+    .stat-value { margin-top: 9px; font-size: 16px; font-weight: 600; }
+    .split { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(270px, .75fr); gap: 14px; }
+    .card-header { display: flex; min-height: 56px; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border-soft); padding: 0 18px; }
+    .card-title { font-size: 12px; font-weight: 600; }
+    .chart-wrap { min-height: 212px; padding: 18px; }
+    .chart { display: block; width: 100%; height: 174px; overflow: visible; }
+    .chart-empty { display: grid; min-height: 174px; place-items: center; color: var(--subtle); font-size: 12px; }
+    .chart-grid { stroke: #2b2b2f; stroke-width: 1; }
+    .chart-line { fill: none; stroke: #e4e4e7; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .watchlist { display: grid; align-content: start; }
+    .watchlist-list { display: grid; gap: 0; padding: 0 17px; }
+    .watch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 47px; border-bottom: 1px solid var(--border-soft); }
+    .watch-row:last-child { border-bottom: 0; }
+    .symbol { font-size: 12px; font-weight: 600; }
+    .asset-class { color: var(--subtle); font-size: 10px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; white-space: nowrap; }
+    th { height: 39px; background: #141416; color: var(--subtle); font-size: 9px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+    td { height: 54px; border-top: 1px solid var(--border-soft); color: #d4d4d8; font-size: 11px; }
+    th, td { padding: 0 14px; }
+    .align-right { text-align: right; }
+    .primary-cell { color: var(--text); font-weight: 500; }
+    .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-variant-numeric: tabular-nums; }
+    .direction, .status-pill { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 999px; padding: 4px 8px; color: var(--muted); font-size: 9px; font-weight: 600; }
+    .direction.bullish { border-color: #285143; color: var(--positive); }
+    .direction.bearish { border-color: #5e343a; color: var(--negative); }
+    .empty { padding: 35px 18px; color: var(--subtle); text-align: center; font-size: 12px; line-height: 1.6; }
+    .state {
+      margin: 22px 0; border: 1px solid #3b3b40; border-radius: 12px; background: #151517; padding: 14px 16px;
+      color: var(--muted); font-size: 12px; line-height: 1.6;
+    }
+    .state.error { border-color: #59373d; color: #fecdd3; }
+    [hidden] { display: none !important; }
+    .loading { color: var(--muted); }
+    .spinner { display: inline-block; width: 13px; height: 13px; margin-right: 7px; border: 2px solid #4b4b50; border-top-color: #eee; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (max-width: 1080px) {
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .split { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 760px) {
+      .sidebar { position: sticky; inset: 0 0 auto; width: auto; height: auto; padding: 11px 14px 9px; border-right: 0; border-bottom: 1px solid var(--border-soft); }
+      .brand { padding: 0 4px 10px; }
+      .brand-mark { width: 30px; height: 30px; }
+      .brand-caption, .nav-label, .sidebar-footer { display: none; }
+      .nav { display: flex; overflow-x: auto; gap: 5px; scrollbar-width: none; }
+      .nav::-webkit-scrollbar { display: none; }
+      .nav a { flex: 0 0 auto; min-height: 34px; padding: 0 9px; font-size: 11px; }
+      .nav-icon { display: none; }
+      .workspace { margin-left: 0; }
+      .topbar { position: static; min-height: 61px; padding: 12px 17px; }
+      .topbar-subtitle { display: none; }
+      .user-badge { max-width: 130px; font-size: 10px; }
+      main { padding: 22px 16px 36px; }
+      .page-heading { align-items: flex-start; }
+      .updated { padding-top: 5px; font-size: 9px; }
+      .metric { padding: 14px; }
+      .metric-value { font-size: 21px; }
+      .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .section { margin-top: 19px; }
+      .card-header { padding: 0 14px; }
+      th, td { padding: 0 11px; }
+    }
+    @media (max-width: 420px) {
+      .metrics { gap: 8px; }
+      .metric { padding: 12px; }
+      .metric-label { font-size: 9px; }
+      .metric-value { font-size: 18px; }
+      .metric-foot { font-size: 9px; }
+      .button { min-height: 33px; padding: 0 9px; font-size: 10px; }
+    }
   </style>
 </head>
-<body class="min-h-screen p-4 sm:p-6 lg:p-8">
-  <div class="max-w-7xl mx-auto space-y-6">
-    <!-- Header -->
-    <header class="flex flex-col md:flex-row justify-between items-start md:items-center pb-6 border-b border-gray-800 gap-4">
-      <div>
-        <div class="flex items-center gap-3">
-          <div class="w-10 h-10 rounded-xl bg-blue-600/20 border border-blue-500/40 flex items-center justify-center text-blue-400 font-bold text-xl">⚡</div>
-          <div>
-            <h1 class="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
-              ICT / SMC Trading Copilot
-              <span class="text-xs px-2.5 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Paper Trading Live</span>
-            </h1>
-            <p class="text-xs text-gray-400">High-confluence Institutional Liquidity & Structure Platform</p>
-          </div>
+<body>
+  <div class="shell">
+    <aside class="sidebar" aria-label="Dashboard navigation">
+      <a class="brand" href="/dashboard" style="color:inherit;text-decoration:none">
+        <span class="brand-mark" aria-hidden="true">TC</span>
+        <span><span class="brand-name">Trading Copilot</span><span class="brand-caption">ICT / SMC paper trading</span></span>
+      </a>
+      <div class="nav-label">Workspace</div>
+      <nav class="nav">
+        <a class="active" href="#overview"><span class="nav-icon">◫</span>Overview</a>
+        <a href="#positions"><span class="nav-icon">↗</span>Open positions</a>
+        <a href="#history"><span class="nav-icon">≡</span>Trade history</a>
+        <a href="#watchlist"><span class="nav-icon">☆</span>Watchlist</a>
+      </nav>
+      <div class="sidebar-footer">Paper trading environment<br>Positions are simulated.</div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div><div class="topbar-title">Trading dashboard</div><div class="topbar-subtitle">Account overview and paper-trade activity</div></div>
+        <div class="top-actions">
+          <span class="user-badge" id="userBadge">Checking session…</span>
+          <button class="button" id="refreshButton" type="button" onclick="refreshData()">Refresh data</button>
         </div>
-      </div>
-      <div id="authStatus" class="flex items-center gap-3">
-        <span class="text-xs text-gray-400" id="userBadge">Connecting...</span>
-        <button onclick="refreshData()" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700">🔄 Refresh</button>
-      </div>
-    </header>
+      </header>
 
-    <!-- Metrics Bar -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-      <div class="card p-5 rounded-xl">
-        <p class="text-xs font-medium text-gray-400 uppercase tracking-wider">Account Balance</p>
-        <h3 class="text-2xl font-bold text-white mt-1" id="balanceVal">$10,000.00</h3>
-        <p class="text-xs text-gray-500 mt-1">Starting: $10,000.00</p>
-      </div>
-      <div class="card p-5 rounded-xl">
-        <p class="text-xs font-medium text-gray-400 uppercase tracking-wider">Unrealized P&L</p>
-        <h3 class="text-2xl font-bold mt-1 text-gray-300" id="unrealizedVal">$0.00</h3>
-        <p class="text-xs text-gray-500 mt-1" id="equityVal">Equity: $10,000.00</p>
-      </div>
-      <div class="card p-5 rounded-xl">
-        <p class="text-xs font-medium text-gray-400 uppercase tracking-wider">Realized P&L</p>
-        <h3 class="text-2xl font-bold mt-1 text-gray-300" id="realizedVal">$0.00</h3>
-        <p class="text-xs text-gray-500 mt-1" id="tradesCount">0 Total Trades</p>
-      </div>
-      <div class="card p-5 rounded-xl">
-        <p class="text-xs font-medium text-gray-400 uppercase tracking-wider">System & Data Status</p>
-        <div class="flex items-center gap-2 mt-2">
-          <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span class="text-sm font-semibold text-emerald-400">Worker Edge Active</span>
+      <main>
+        <div id="accessState" class="state" role="status" aria-live="polite"><span class="spinner"></span>Loading your account…</div>
+        <div id="dashboardContent" hidden>
+          <section id="overview">
+            <div class="page-heading">
+              <div><h1>Overview</h1><p class="page-description">A clear view of your paper-trading account and activity.</p></div>
+              <div class="updated" id="updatedAt">—</div>
+            </div>
+            <div class="metrics">
+              <article class="metric"><div class="metric-label">Account balance</div><div class="metric-value" id="balanceVal">—</div><div class="metric-foot" id="startingBalance">Starting balance —</div></article>
+              <article class="metric"><div class="metric-label">Account equity</div><div class="metric-value" id="equityVal">—</div><div class="metric-foot">Balance plus open P&amp;L</div></article>
+              <article class="metric"><div class="metric-label">Realized P&amp;L</div><div class="metric-value" id="realizedVal">—</div><div class="metric-foot" id="tradesCount">— total trades</div></article>
+              <article class="metric"><div class="metric-label">Unrealized P&amp;L</div><div class="metric-value" id="unrealizedVal">—</div><div class="metric-foot">Across open positions</div></article>
+            </div>
+          </section>
+
+          <section class="section" aria-label="Account statistics">
+            <div class="stats-grid">
+              <article class="stat"><div class="stat-label">Open positions</div><div class="stat-value" id="openCount">—</div></article>
+              <article class="stat"><div class="stat-label">Win rate</div><div class="stat-value" id="winRate">—</div></article>
+              <article class="stat"><div class="stat-label">Account return</div><div class="stat-value" id="accountReturn">—</div></article>
+              <article class="stat"><div class="stat-label">Open risk</div><div class="stat-value" id="openRisk">—</div></article>
+            </div>
+          </section>
+
+          <section class="section split">
+            <article class="card" aria-labelledby="performanceTitle">
+              <div class="card-header"><div class="card-title" id="performanceTitle">Realized performance</div><span class="section-note">Closed trades · latest 50</span></div>
+              <div class="chart-wrap" id="performanceChart"><div class="chart-empty">Performance history will appear when trades close.</div></div>
+            </article>
+            <article class="card watchlist" id="watchlist">
+              <div class="card-header"><div class="card-title">Watchlist</div><span class="count" id="watchlistCount">0 symbols</span></div>
+              <div class="watchlist-list" id="watchlistList"><div class="empty">No watchlist symbols yet.</div></div>
+            </article>
+          </section>
+
+          <section class="section card" id="positions">
+            <div class="card-header"><div class="card-title">Open paper positions</div><span class="count" id="positionsBadge">0 active</span></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>ID / Symbol</th><th>Direction</th><th>Entry</th><th>Mark price</th><th>Stop loss</th><th>Take profit</th><th>P&amp;L / R</th><th>Target progress</th><th class="align-right">Management</th></tr></thead>
+                <tbody id="positionsTableBody"><tr><td class="empty" colspan="9">Loading positions…</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="section card" id="history">
+            <div class="card-header"><div class="card-title">Trade history</div><span class="count">Closed positions</span></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Symbol</th><th>Direction</th><th>Entry</th><th>Exit price</th><th>Exit reason</th><th>Final P&amp;L</th><th>Close time</th></tr></thead>
+                <tbody id="historyTableBody"><tr><td class="empty" colspan="7">Loading trade history…</td></tr></tbody>
+              </table>
+            </div>
+          </section>
         </div>
-        <p class="text-xs text-gray-500 mt-1">1m Cron Live Monitoring</p>
-      </div>
-    </div>
-
-    <!-- Active Open Positions -->
-    <div class="card rounded-xl overflow-hidden">
-      <div class="px-6 py-4 border-b border-gray-800 flex justify-between items-center">
-        <h2 class="text-base font-semibold text-white">Open Paper Positions</h2>
-        <span class="text-xs text-gray-400" id="positionsBadge">0 active</span>
-      </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-left text-sm">
-          <thead class="text-xs uppercase bg-gray-900/50 text-gray-400 border-b border-gray-800">
-            <tr>
-              <th class="px-6 py-3">ID & Symbol</th>
-              <th class="px-6 py-3">Direction</th>
-              <th class="px-6 py-3">Entry</th>
-              <th class="px-6 py-3">Mark Price</th>
-              <th class="px-6 py-3">Stop Loss</th>
-              <th class="px-6 py-3">Take Profit</th>
-              <th class="px-6 py-3">P&L ($ / R)</th>
-              <th class="px-6 py-3">Target %</th>
-              <th class="px-6 py-3 text-right">Action</th>
-            </tr>
-          </thead>
-          <tbody id="positionsTableBody" class="divide-y divide-gray-800">
-            <tr>
-              <td colspan="9" class="px-6 py-8 text-center text-gray-500">No open positions. Use Telegram to generate or approve signals.</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- Closed Trade History -->
-    <div class="card rounded-xl overflow-hidden">
-      <div class="px-6 py-4 border-b border-gray-800">
-        <h2 class="text-base font-semibold text-white">Trade History (Closed Positions)</h2>
-      </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-left text-sm">
-          <thead class="text-xs uppercase bg-gray-900/50 text-gray-400 border-b border-gray-800">
-            <tr>
-              <th class="px-6 py-3">Symbol</th>
-              <th class="px-6 py-3">Direction</th>
-              <th class="px-6 py-3">Entry</th>
-              <th class="px-6 py-3">Exit Price</th>
-              <th class="px-6 py-3">Exit Reason</th>
-              <th class="px-6 py-3">Final P&L</th>
-              <th class="px-6 py-3">Close Time</th>
-            </tr>
-          </thead>
-          <tbody id="historyTableBody" class="divide-y divide-gray-800">
-            <tr>
-              <td colspan="7" class="px-6 py-8 text-center text-gray-500">No closed trades recorded.</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      </main>
     </div>
   </div>
 
   <script>
-    async function initDashboard() {
-      // Check URL parameters for single-use token
-      const urlParams = new URLSearchParams(window.location.search);
-      const token = urlParams.get('token');
+    const money = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value))
+      ? new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(value))
+      : '—';
+    const number = value => Number.isFinite(Number(value))
+      ? new Intl.NumberFormat(undefined, { maximumFractionDigits: 8 }).format(Number(value))
+      : '—';
+    const safeText = value => String(value ?? '').replace(/[&<>"']/g, char => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[char]);
+    const signedMoney = value => value === null || value === undefined ? '—' : `${Number(value) >= 0 ? '+' : ''}${money(Number(value) || 0)}`;
+    const pnlClass = value => value === null || value === undefined ? '' : Number(value) >= 0 ? 'positive' : 'negative';
 
+    function showState(message, error = false) {
+      const state = document.getElementById('accessState');
+      state.hidden = false;
+      state.className = `state${error ? ' error' : ''}`;
+      state.textContent = message;
+      document.getElementById('dashboardContent').hidden = true;
+    }
+
+    function showDashboard() {
+      document.getElementById('accessState').hidden = true;
+      document.getElementById('dashboardContent').hidden = false;
+    }
+
+    async function initDashboard() {
+      const currentUrl = new URL(window.location.href);
+      const token = currentUrl.searchParams.get('token');
       if (token) {
+        currentUrl.searchParams.delete('token');
+        window.history.replaceState({}, document.title, `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
         try {
-          const res = await fetch('/api/auth/token', {
+          const response = await fetch('/api/auth/token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ token }),
             credentials: 'same-origin',
           });
-          if (res.ok) {
-            window.history.replaceState({}, document.title, window.location.pathname);
+          if (!response.ok) {
+            showState('This dashboard link is invalid, expired, or has already been used. Request a new link from the Telegram bot.', true);
+            return;
           }
-        } catch (e) {
-          console.error('Failed to exchange token', e);
+          window.location.replace('/dashboard');
+          return;
+        } catch {
+          showState('Unable to verify this dashboard link. Check your connection and request a new link if the problem continues.', true);
+          return;
         }
       }
-
       await refreshData();
     }
 
+    function renderChart(history) {
+      const container = document.getElementById('performanceChart');
+      const trades = [...history].reverse().filter(trade => Number.isFinite(Number(trade.pnl)));
+      if (trades.length < 2) {
+        container.innerHTML = '<div class="chart-empty">Performance history will appear when at least two trades have closed.</div>';
+        return;
+      }
+      let total = 0;
+      const values = trades.map(trade => (total += Number(trade.pnl)));
+      const min = Math.min(0, ...values);
+      const max = Math.max(0, ...values);
+      const span = max - min || 1;
+      const points = values.map((value, index) => {
+        const x = 4 + index * 992 / (values.length - 1);
+        const y = 8 + (max - value) * 148 / span;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(' ');
+      container.innerHTML = `<svg class="chart" viewBox="0 0 1000 164" role="img" aria-label="Cumulative realized profit and loss chart">
+        <line class="chart-grid" x1="0" y1="8" x2="1000" y2="8"></line>
+        <line class="chart-grid" x1="0" y1="82" x2="1000" y2="82"></line>
+        <line class="chart-grid" x1="0" y1="156" x2="1000" y2="156"></line>
+        <polyline class="chart-line" points="${points}"></polyline></svg>
+        <div class="section-note">Cumulative realized P&amp;L: ${safeText(money(total))}</div>`;
+    }
+
+    function renderPositions(positions) {
+      const body = document.getElementById('positionsTableBody');
+      document.getElementById('positionsBadge').textContent = `${positions.length} active`;
+      if (!positions.length) {
+        body.innerHTML = '<tr><td class="empty" colspan="9">No open positions. Use Telegram to generate or approve qualified paper-trade signals.</td></tr>';
+        return;
+      }
+      body.innerHTML = positions.map(position => {
+        const pnl = Number(position.unrealized_pnl) || 0;
+        const direction = String(position.direction || '').toUpperCase();
+        return `<tr>
+          <td class="primary-cell">#${safeText(position.position_id)} <span class="mono">${safeText(position.symbol)}</span></td>
+          <td><span class="direction ${direction === 'BULLISH' ? 'bullish' : 'bearish'}">${safeText(direction)}</span></td>
+          <td class="mono">${safeText(number(position.entry_price))}</td>
+          <td class="mono primary-cell">${safeText(number(position.current_price ?? position.entry_price))}</td>
+          <td class="mono">${safeText(number(position.stop_loss))}</td>
+          <td class="mono">${safeText(number(position.take_profit))}</td>
+          <td class="mono ${pnlClass(pnl)}">${safeText(signedMoney(pnl))} (${safeText(number(position.r_multiple))}R)</td>
+          <td>${safeText(number(position.target_progress_pct))}%</td>
+          <td class="align-right"><span class="section-note">Auto SL / TP</span></td>
+        </tr>`;
+      }).join('');
+    }
+
+    function renderHistory(history) {
+      const body = document.getElementById('historyTableBody');
+      if (!history.length) {
+        body.innerHTML = '<tr><td class="empty" colspan="7">No closed trades recorded yet.</td></tr>';
+        return;
+      }
+      body.innerHTML = history.map(trade => {
+        const pnl = Number(trade.pnl) || 0;
+        const direction = String(trade.direction || '').toUpperCase();
+        const closeTime = trade.exit_time ? new Date(trade.exit_time).toLocaleString() : '—';
+        return `<tr>
+          <td class="primary-cell mono">${safeText(trade.symbol)}</td>
+          <td><span class="direction ${direction === 'BULLISH' ? 'bullish' : 'bearish'}">${safeText(direction)}</span></td>
+          <td class="mono">${safeText(number(trade.entry_price))}</td>
+          <td class="mono primary-cell">${safeText(number(trade.exit_price))}</td>
+          <td><span class="status-pill">${safeText(trade.exit_reason || '—')}</span></td>
+          <td class="mono ${pnlClass(pnl)}">${safeText(signedMoney(pnl))}</td>
+          <td>${safeText(closeTime)}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    function renderWatchlist(watchlist) {
+      const list = document.getElementById('watchlistList');
+      document.getElementById('watchlistCount').textContent = `${watchlist.length} symbol${watchlist.length === 1 ? '' : 's'}`;
+      if (!watchlist.length) {
+        list.innerHTML = '<div class="empty">No watchlist symbols yet.</div>';
+        return;
+      }
+      list.innerHTML = watchlist.map(item => `<div class="watch-row">
+        <span class="symbol mono">${safeText(item.symbol)}</span>
+        <span class="asset-class">${safeText(item.asset_class || 'Market')}</span>
+      </div>`).join('');
+    }
+
     async function refreshData() {
+      const button = document.getElementById('refreshButton');
+      button.disabled = true;
+      button.textContent = 'Refreshing…';
       try {
-        const res = await fetch('/api/user/summary', { credentials: 'same-origin' });
-        if (res.status === 401) {
-          document.getElementById('userBadge').innerText = '🔒 Login via Telegram /dashboard';
+        const response = await fetch('/api/user/summary', {
+          credentials: 'same-origin',
+          headers: { Accept: 'application/json' },
+          cache: 'no-store',
+        });
+        if (response.status === 401) {
+          document.getElementById('userBadge').textContent = 'Session required';
+          showState('Your dashboard session is missing or expired. Open a fresh dashboard link from the Telegram bot to sign in.', true);
           return;
         }
+        if (!response.ok) throw new Error(`Dashboard data request failed (${response.status}).`);
 
-        const data = await res.json();
-        document.getElementById('userBadge').innerText = `👤 User: ${data.user_id}`;
+        const data = await response.json();
+        const positions = Array.isArray(data.positions) ? data.positions : [];
+        const history = Array.isArray(data.history) ? data.history : [];
+        const watchlist = Array.isArray(data.watchlist) ? data.watchlist : [];
+        const balance = data.balance || {};
+        const currentBalance = Number(balance.current_balance);
+        const startingBalance = Number(balance.starting_balance);
+        const realized = balance.realized_pnl === null || balance.realized_pnl === undefined
+          ? null
+          : Number(balance.realized_pnl);
+        const unrealized = positions.reduce((sum, position) => sum + (Number(position.unrealized_pnl) || 0), 0);
+        const totalTrades = Number(balance.total_trades) || history.length;
+        const wins = balance.winning_trades === null || balance.winning_trades === undefined
+          ? history.filter(trade => Number(trade.pnl) > 0).length
+          : Number(balance.winning_trades);
+        const returnPct = Number.isFinite(startingBalance) && startingBalance > 0
+          ? (((realized || 0) + unrealized) / startingBalance) * 100
+          : null;
+        const openRisk = positions.reduce((sum, position) => sum + (Number(position.initial_risk) || 0), 0);
+        const winRate = totalTrades > 0 ? `${(wins / totalTrades * 100).toFixed(1)}%` : '—';
 
-        // Balance & P&L
-        const bal = data.balance?.current_balance || 10000;
-        const real = data.balance?.realized_pnl || 0;
-        let unreal = 0;
-
-        (data.positions || []).forEach(p => { unreal += (p.unrealized_pnl || 0); });
-
-        document.getElementById('balanceVal').innerText = `$${bal.toFixed(2)}`;
-        document.getElementById('realizedVal').innerText = `${real >= 0 ? '+' : ''}$${real.toFixed(2)}`;
-        document.getElementById('realizedVal').className = `text-2xl font-bold mt-1 ${real >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
-        document.getElementById('unrealizedVal').innerText = `${unreal >= 0 ? '+' : ''}$${unreal.toFixed(2)}`;
-        document.getElementById('unrealizedVal').className = `text-2xl font-bold mt-1 ${unreal >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
-        document.getElementById('equityVal').innerText = `Equity: $${(bal + unreal).toFixed(2)}`;
-        document.getElementById('tradesCount').innerText = `${data.balance?.total_trades || 0} Total Trades`;
-
-        // Render Positions
-        const posBody = document.getElementById('positionsTableBody');
-        const posList = data.positions || [];
-        document.getElementById('positionsBadge').innerText = `${posList.length} active`;
-
-        if (posList.length === 0) {
-          posBody.innerHTML = '<tr><td colspan="9" class="px-6 py-8 text-center text-gray-500">No open positions. Use Telegram to generate or approve signals.</td></tr>';
-        } else {
-          posBody.innerHTML = posList.map(p => `
-            <tr>
-              <td class="px-6 py-4 font-medium text-white">#${p.position_id} <code>${p.symbol}</code></td>
-              <td class="px-6 py-4"><span class="px-2 py-0.5 rounded text-xs ${p.direction === 'BULLISH' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}">${p.direction}</span></td>
-              <td class="px-6 py-4">${p.entry_price}</td>
-              <td class="px-6 py-4 font-semibold text-blue-400">${p.current_price || p.entry_price}</td>
-              <td class="px-6 py-4 text-rose-400">${p.stop_loss}</td>
-              <td class="px-6 py-4 text-emerald-400">${p.take_profit}</td>
-              <td class="px-6 py-4 font-bold ${p.unrealized_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">
-                ${p.unrealized_pnl >= 0 ? '+' : ''}$${(p.unrealized_pnl || 0).toFixed(2)} (${p.r_multiple || 0}R)
-              </td>
-              <td class="px-6 py-4">${p.target_progress_pct || 0}%</td>
-              <td class="px-6 py-4 text-right">
-                <span class="text-xs text-gray-500">Auto SL/TP</span>
-              </td>
-            </tr>
-          `).join('');
-        }
-
-        // Render History
-        const histBody = document.getElementById('historyTableBody');
-        const histList = data.history || [];
-        if (histList.length === 0) {
-          histBody.innerHTML = '<tr><td colspan="7" class="px-6 py-8 text-center text-gray-500">No closed trades recorded.</td></tr>';
-        } else {
-          histBody.innerHTML = histList.map(h => `
-            <tr>
-              <td class="px-6 py-4 font-medium text-white"><code>${h.symbol}</code></td>
-              <td class="px-6 py-4 text-xs ${h.direction === 'BULLISH' ? 'text-emerald-400' : 'text-rose-400'}">${h.direction}</td>
-              <td class="px-6 py-4">${h.entry_price}</td>
-              <td class="px-6 py-4 font-medium text-white">${h.exit_price || '-'}</td>
-              <td class="px-6 py-4"><span class="text-xs px-2 py-0.5 rounded bg-gray-800 text-gray-300">${h.exit_reason || '-'}</span></td>
-              <td class="px-6 py-4 font-bold ${h.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${h.pnl >= 0 ? '+' : ''}$${(h.pnl || 0).toFixed(2)}</td>
-              <td class="px-6 py-4 text-xs text-gray-400">${h.exit_time ? new Date(h.exit_time).toLocaleDateString() : '-'}</td>
-            </tr>
-          `).join('');
-        }
-      } catch (e) {
-        console.error('Error fetching dashboard summary:', e);
+        document.getElementById('userBadge').textContent = `User ${data.user_id}`;
+        document.getElementById('balanceVal').textContent = Number.isFinite(currentBalance) ? money(currentBalance) : '—';
+        document.getElementById('startingBalance').textContent = Number.isFinite(startingBalance) ? `Starting ${money(startingBalance)}` : 'Starting balance unavailable';
+        document.getElementById('equityVal').textContent = Number.isFinite(currentBalance) ? money(currentBalance + unrealized) : '—';
+        document.getElementById('realizedVal').textContent = money(realized);
+        document.getElementById('realizedVal').className = `metric-value ${pnlClass(realized)}`;
+        document.getElementById('unrealizedVal').textContent = signedMoney(unrealized);
+        document.getElementById('unrealizedVal').className = `metric-value ${pnlClass(unrealized)}`;
+        document.getElementById('tradesCount').textContent = `${totalTrades} total trades`;
+        document.getElementById('openCount').textContent = String(positions.length);
+        document.getElementById('winRate').textContent = winRate;
+        document.getElementById('accountReturn').textContent = returnPct === null ? '—' : `${returnPct >= 0 ? '+' : ''}${returnPct.toFixed(2)}%`;
+        document.getElementById('accountReturn').className = `stat-value ${returnPct === null ? '' : pnlClass(returnPct)}`;
+        document.getElementById('openRisk').textContent = money(openRisk);
+        document.getElementById('updatedAt').textContent = data.timestamp ? `Updated ${new Date(data.timestamp).toLocaleTimeString()}` : 'Updated just now';
+        renderChart(history);
+        renderPositions(positions);
+        renderHistory(history);
+        renderWatchlist(watchlist);
+        showDashboard();
+      } catch (error) {
+        console.error('Dashboard refresh failed', error instanceof Error ? error.message : 'Unknown error');
+        document.getElementById('userBadge').textContent = 'Data unavailable';
+        showState('Dashboard data could not be loaded. Please try refreshing in a moment.', true);
+      } finally {
+        button.disabled = false;
+        button.textContent = 'Refresh data';
       }
     }
 
-    window.onload = initDashboard;
+    document.querySelectorAll('.nav a').forEach(link => link.addEventListener('click', () => {
+      document.querySelectorAll('.nav a').forEach(item => item.classList.remove('active'));
+      link.classList.add('active');
+    }));
+
+    window.addEventListener('DOMContentLoaded', initDashboard);
   </script>
 </body>
 </html>
