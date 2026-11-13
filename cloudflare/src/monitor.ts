@@ -26,7 +26,7 @@ export async function runPositionMonitoring(env: Env): Promise<{
   for (const pos of positions) {
     if (!symbolMap.has(pos.symbol)) {
       try {
-        const quote = await fetchCurrentPrice(pos.symbol);
+        const quote = await fetchCurrentPrice(pos.symbol, env.TWELVE_DATA_API_KEY);
         symbolMap.set(pos.symbol, quote);
       } catch (error) {
         if (!(error instanceof Error)) {

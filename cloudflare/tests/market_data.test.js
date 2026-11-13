@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchCurrentPrice, MarketDataError } from '../src/market_data.js';
+import {
+  fetchCurrentPrice,
+  getMarketInstrumentCategory,
+  MarketDataError,
+} from '../src/market_data.js';
 
 const binanceTicker = {
   lastPrice: '65000.25',
@@ -226,5 +230,69 @@ test('Market data - Keeps forex routed to Yahoo Finance', async () => {
     assert.equal(quote?.price, 1.08);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test('Market data - Spot metals use Twelve Data without substituting futures or quote currency', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async url => {
+    requests.push(url);
+    return Response.json({ price: '2345.67' });
+  };
+  try {
+    for (const [symbol, providerSymbol] of [
+      ['XAUUSD', 'XAU/USD'],
+      ['XAGUSD', 'XAG/USD'],
+    ]) {
+      const quote = await fetchCurrentPrice(symbol, 'mock-private-api-key');
+      const url = new URL(requests.at(-1));
+      assert.equal(url.pathname, '/price');
+      assert.equal(url.searchParams.get('symbol'), providerSymbol);
+      assert.equal(url.searchParams.get('apikey'), 'mock-private-api-key');
+      assert.equal(quote.symbol, symbol);
+      assert.equal(quote.price, 2345.67);
+      assert.equal(quote.source, 'Twelve Data Latest Price');
+    }
+
+    assert.equal(getMarketInstrumentCategory('BTCUSDT'), 'CRYPTO');
+    assert.equal(getMarketInstrumentCategory('EURUSD'), 'FOREX');
+    assert.equal(getMarketInstrumentCategory('XAUUSD'), 'METAL');
+    assert.equal(getMarketInstrumentCategory('XAUUSDT'), null);
+    assert.equal(requests.some(url => url.includes('GC%3DF') || url.includes('SI%3DF')), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Market data - Metals reject unsupported XAUUSDT and sanitize Twelve Data failures', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const diagnostics = [];
+  let requests = 0;
+  globalThis.fetch = async () => {
+    requests += 1;
+    return Response.json({
+      status: 'error',
+      message: 'Invalid apiKey=do-not-log-this',
+    }, { status: 401 });
+  };
+  console.warn = (...args) => diagnostics.push(args);
+
+  try {
+    await assert.rejects(fetchCurrentPrice('XAUUSDT', 'secret-api-key'), /no verified XAU\/USDT listing/i);
+    assert.equal(requests, 0);
+
+    await assert.rejects(fetchCurrentPrice('XAUUSD', 'secret-api-key'), error => {
+      assert.ok(error instanceof MarketDataError);
+      assert.match(error.message, /Twelve Data: HTTP 401/);
+      assert.doesNotMatch(error.message, /do-not-log-this|secret-api-key/);
+      return true;
+    });
+    assert.equal(JSON.stringify(diagnostics).includes('secret-api-key'), false);
+    assert.equal(JSON.stringify(diagnostics).includes('do-not-log-this'), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
   }
 });

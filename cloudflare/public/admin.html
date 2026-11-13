@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a0a0b">
+  <meta name="referrer" content="strict-origin">
+  <title>Admin Control — Trading Copilot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, Geist, ui-sans-serif, system-ui, sans-serif;
+      --bg: #0a0a0b; --panel: #111113; --raised: #18181b; --border: #29292d;
+      --text: #f4f4f5; --muted: #a1a1aa; --subtle: #71717a; --danger: #fda4af;
+      background: var(--bg); color: var(--text); font-variant-numeric: tabular-nums;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; background: var(--bg); font-size: 13px; }
+    button, input, select { font: inherit; }
+    .layout { min-height: 100vh; }
+    .sidebar { position: fixed; inset: 0 auto 0 0; width: 224px; display: flex; flex-direction: column; padding: 22px 14px; background: #0d0d0e; border-right: 1px solid #202023; }
+    .brand { display: flex; gap: 11px; align-items: center; padding: 0 8px 26px; }
+    .mark { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid #444448; border-radius: 10px; background: #202023; font-size: 11px; font-weight: 700; }
+    .brand-title { font-size: 13px; font-weight: 600; }
+    .brand-sub { margin-top: 3px; color: var(--subtle); font-size: 10px; }
+    .nav-label { padding: 13px 10px 8px; color: var(--subtle); font-size: 10px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; }
+    .nav-item { display: block; padding: 11px; border: 1px solid #303034; border-radius: 9px; background: #19191b; color: var(--text); font-size: 12px; }
+    .side-note { margin-top: auto; padding: 13px 10px 2px; border-top: 1px solid #202023; color: var(--subtle); font-size: 10px; line-height: 1.6; }
+    .main { min-height: 100vh; margin-left: 224px; }
+    .topbar { position: sticky; top: 0; z-index: 3; min-height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 32px; border-bottom: 1px solid #202023; background: rgb(10 10 11 / 94%); backdrop-filter: blur(12px); }
+    .top-title { font-size: 14px; font-weight: 600; }
+    .top-sub { margin-top: 4px; color: var(--subtle); font-size: 10px; }
+    .admin-badge { border: 1px solid #414146; border-radius: 99px; padding: 6px 9px; color: #d4d4d8; font-size: 10px; }
+    main { width: min(1440px, 100%); margin: 0 auto; padding: 29px 32px 48px; }
+    .page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; margin-bottom: 22px; }
+    h1 { margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -.04em; }
+    .description { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .metric, .card { min-width: 0; border: 1px solid #202023; border-radius: 13px; background: var(--panel); }
+    .metric { padding: 17px 18px; }
+    .metric-label { color: var(--muted); font-size: 10px; font-weight: 500; }
+    .metric-value { margin-top: 10px; font-size: 25px; font-weight: 600; letter-spacing: -.04em; }
+    .metric-foot { margin-top: 7px; color: var(--subtle); font-size: 10px; }
+    .section { margin-top: 20px; }
+    .split { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(260px, .8fr); gap: 12px; }
+    .card-head { min-height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 17px; border-bottom: 1px solid #202023; }
+    .card-title { font-size: 12px; font-weight: 600; }
+    .caption { color: var(--subtle); font-size: 10px; }
+    .feed { max-height: 315px; overflow: auto; padding: 3px 17px; }
+    .feed-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 12px 0; border-bottom: 1px solid #202023; }
+    .feed-row:last-child { border-bottom: 0; }
+    .feed-main { color: #e4e4e7; font-size: 11px; }
+    .feed-detail, .feed-time { color: var(--subtle); font-size: 10px; }
+    .feed-time { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+    .command-list { padding: 3px 17px; }
+    .command-row { display: flex; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid #202023; }
+    .command-row:last-child { border: 0; }
+    .command-name { color: #e4e4e7; font-family: Consolas, monospace; font-size: 11px; }
+    .command-count { color: var(--muted); font-size: 10px; }
+    .toolbar { display: flex; align-items: center; gap: 8px; }
+    .field { min-height: 34px; border: 1px solid #353539; border-radius: 8px; outline: 0; background: #171719; padding: 0 10px; color: var(--text); font-size: 11px; }
+    .field:focus { border-color: #6b6b72; }
+    .search { width: min(230px, 35vw); }
+    .button { min-height: 33px; border: 1px solid #3b3b40; border-radius: 8px; background: #1c1c1f; padding: 0 10px; color: var(--text); cursor: pointer; font-size: 10px; font-weight: 500; }
+    .button:hover { background: #27272a; }
+    .button.danger { border-color: #59373d; color: var(--danger); }
+    .button:disabled { cursor: wait; opacity: .6; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; white-space: nowrap; }
+    th { height: 39px; background: #141416; color: var(--subtle); font-size: 9px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+    td { height: 51px; border-top: 1px solid #202023; color: #d4d4d8; font-size: 10px; }
+    th, td { padding: 0 13px; }
+    .user-cell { color: var(--text); font-weight: 500; }
+    .muted { color: var(--subtle); }
+    .status { display: inline-flex; border: 1px solid #39393e; border-radius: 99px; padding: 4px 8px; color: #d4d4d8; font-size: 9px; }
+    .status.suspended { border-color: #59373d; color: var(--danger); }
+    .empty { padding: 28px 14px; color: var(--subtle); text-align: center; font-size: 11px; line-height: 1.6; }
+    .notice { margin: 20px 0; border: 1px solid #38383d; border-radius: 11px; background: #151517; padding: 13px 15px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+    .notice.error { border-color: #59373d; color: #fecdd3; }
+    [hidden] { display: none !important; }
+    @media (max-width: 960px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .split { grid-template-columns: 1fr; } }
+    @media (max-width: 680px) {
+      .sidebar { position: relative; width: auto; padding: 13px 14px; border: 0; border-bottom: 1px solid #202023; }
+      .brand { padding: 0; } .nav-label, .nav-item, .side-note { display: none; }
+      .main { margin-left: 0; } .topbar { position: static; min-height: 56px; padding: 11px 16px; }
+      main { padding: 21px 14px 34px; } .page-heading { align-items: flex-start; }
+      h1 { font-size: 22px; } .toolbar { flex-wrap: wrap; justify-content: flex-end; }
+      .search { width: 150px; } .card-head { padding: 0 13px; } th, td { padding: 0 10px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand"><div class="mark">TC</div><div><div class="brand-title">Trading Copilot</div><div class="brand-sub">Operations console</div></div></div>
+      <div class="nav-label">Administration</div>
+      <div class="nav-item">User management</div>
+      <div class="side-note">Operational data only<br>Personal trading data is not available here.</div>
+    </aside>
+    <div class="main">
+      <header class="topbar"><div><div class="top-title">Admin control</div><div class="top-sub">Bot adoption and user access</div></div><span class="admin-badge">Authorized administrator</span></header>
+      <main>
+        <div id="notice" class="notice" role="status" aria-live="polite">Checking administrator session…</div>
+        <div id="content" hidden>
+          <div class="page-heading"><div><h1>Operations overview</h1><p class="description">Registration, service usage, and user access status. No personal trading information is available.</p></div></div>
+          <section class="grid" aria-label="User adoption overview">
+            <article class="metric"><div class="metric-label">Registered users</div><div class="metric-value" id="totalUsers">—</div><div class="metric-foot">All registered accounts</div></article>
+            <article class="metric"><div class="metric-label">Active users</div><div class="metric-value" id="activeUsers">—</div><div class="metric-foot">Interacted in the last 30 days</div></article>
+            <article class="metric"><div class="metric-label">New today</div><div class="metric-value" id="newToday">—</div><div class="metric-foot">Registrations, UTC</div></article>
+            <article class="metric"><div class="metric-label">Suspended users</div><div class="metric-value" id="suspendedUsers">—</div><div class="metric-foot">Access currently disabled</div></article>
+          </section>
+          <section class="section split">
+            <article class="card"><div class="card-head"><div class="card-title">Recent bot activity</div><span class="caption">Latest events</span></div><div class="feed" id="activityFeed"><div class="empty">Loading activity…</div></div></article>
+            <article class="card"><div class="card-head"><div class="card-title">Command usage</div><span class="caption">All recorded commands</span></div><div class="command-list" id="commandUsage"><div class="empty">Loading command usage…</div></div></article>
+          </section>
+          <section class="section card">
+            <div class="card-head"><div><div class="card-title">Users</div><div class="caption" style="margin-top:4px">Access management only</div></div>
+              <div class="toolbar">
+                <input class="field search" id="searchUsers" type="search" placeholder="Search users" aria-label="Search users">
+                <select class="field" id="statusFilter" aria-label="Filter by status"><option value="ALL">All statuses</option><option value="ACTIVE">Active</option><option value="SUSPENDED">Suspended</option></select>
+                <button class="button" id="reloadButton" type="button">Refresh</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Telegram user</th><th>First name</th><th>Registered</th><th>Last active</th><th>Status</th><th>Action</th></tr></thead>
+                <tbody id="usersBody"><tr><td class="empty" colspan="6">Loading users…</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </div>
+  <script>
+    const notice = document.getElementById('notice');
+    let searchTimer;
+    const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[char]);
+    const dateTime = value => value ? new Date(value).toLocaleString() : '—';
+
+    function showError(text) {
+      notice.hidden = false;
+      notice.className = 'notice error';
+      notice.textContent = text;
+      document.getElementById('content').hidden = true;
+    }
+    function showContent() {
+      notice.hidden = true;
+      document.getElementById('content').hidden = false;
+    }
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        ...options,
+        headers: { Accept: 'application/json', ...(options.headers || {}) },
+      });
+      if (response.status === 401 || response.status === 403) throw new Error('Admin access denied. Open a new /admin link from the authorized Telegram account.');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `Request failed (${response.status}).`);
+      return data;
+    }
+
+    async function authenticate() {
+      const url = new URL(location.href);
+      const token = url.searchParams.get('token');
+      if (!token) return false;
+      url.searchParams.delete('token');
+      history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+      const response = await fetch('/api/admin/auth/token', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      if (!response.ok) throw new Error('This admin link is invalid, expired, used, or is not authorized.');
+      location.replace('/admin');
+      return true;
+    }
+
+    function renderActivity(events) {
+      const feed = document.getElementById('activityFeed');
+      if (!events.length) { feed.innerHTML = '<div class="empty">No activity recorded yet.</div>'; return; }
+      feed.innerHTML = events.map(event => {
+        const label = event.event_type === 'COMMAND_USED' ? 'Command used' :
+          event.event_type === 'USER_JOINED' ? 'User joined' :
+          event.event_type === 'USER_SUSPENDED' ? 'User suspended' :
+          event.event_type === 'USER_REACTIVATED' ? 'User reactivated' : 'Bot activity';
+        const name = event.username ? `@${event.username}` : (event.first_name || `User ${event.user_id}`);
+        const detail = event.event_type === 'COMMAND_USED' ? escapeHtml(event.command_name) : '';
+        return `<div class="feed-row"><div class="feed-main">${escapeHtml(label)} · ${escapeHtml(name)}</div>
+          <div class="feed-detail">${detail}</div><div class="feed-time">${escapeHtml(dateTime(event.created_at))}</div></div>`;
+      }).join('');
+    }
+
+    function renderCommands(commands) {
+      const list = document.getElementById('commandUsage');
+      if (!commands.length) { list.innerHTML = '<div class="empty">No command activity recorded yet.</div>'; return; }
+      list.innerHTML = commands.map(command => `<div class="command-row"><span class="command-name">${escapeHtml(command.command_name)}</span><span class="command-count">${Number(command.uses) || 0} uses</span></div>`).join('');
+    }
+
+    function renderUsers(users) {
+      const tbody = document.getElementById('usersBody');
+      if (!users.length) { tbody.innerHTML = '<tr><td class="empty" colspan="6">No users match these filters.</td></tr>'; return; }
+      tbody.innerHTML = users.map(user => {
+        const suspended = user.status === 'SUSPENDED';
+        const label = user.username ? `@${user.username}` : `ID ${user.user_id}`;
+        const button = suspended
+          ? `<button class="button" data-action="reactivate" data-user="${escapeHtml(user.user_id)}">Restore access</button>`
+          : `<button class="button danger" data-action="suspend" data-user="${escapeHtml(user.user_id)}">Suspend</button>`;
+        return `<tr><td class="user-cell">${escapeHtml(label)}</td><td>${escapeHtml(user.first_name || '—')}</td>
+          <td>${escapeHtml(dateTime(user.registered_at))}</td><td>${escapeHtml(dateTime(user.last_active_at))}</td>
+          <td><span class="status ${suspended ? 'suspended' : ''}">${suspended ? 'Suspended' : 'Active'}</span></td><td>${button}</td></tr>`;
+      }).join('');
+    }
+
+    async function loadOverview() {
+      const data = await api('/api/admin/overview');
+      document.getElementById('totalUsers').textContent = data.total_users;
+      document.getElementById('activeUsers').textContent = data.active_users;
+      document.getElementById('newToday').textContent = data.new_today;
+      document.getElementById('suspendedUsers').textContent = data.suspended_users;
+      renderActivity(data.recent_activity);
+      renderCommands(data.command_usage);
+    }
+
+    async function loadUsers() {
+      const status = document.getElementById('statusFilter').value;
+      const search = document.getElementById('searchUsers').value.trim();
+      const params = new URLSearchParams({ status });
+      if (search) params.set('q', search);
+      const data = await api(`/api/admin/users?${params}`);
+      renderUsers(data.users);
+    }
+
+    async function refreshAll() {
+      try {
+        await Promise.all([loadOverview(), loadUsers()]);
+        showContent();
+      } catch (error) {
+        showError(error instanceof Error ? error.message : 'Unable to load admin data.');
+      }
+    }
+
+    document.getElementById('reloadButton').addEventListener('click', refreshAll);
+    document.getElementById('statusFilter').addEventListener('change', loadUsers);
+    document.getElementById('searchUsers').addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => loadUsers().catch(error => showError(error.message)), 250);
+    });
+    document.getElementById('usersBody').addEventListener('click', async event => {
+      const button = event.target.closest('button[data-action]');
+      if (!button) return;
+      const action = button.dataset.action;
+      const userId = button.dataset.user;
+      const prompt = action === 'suspend'
+        ? 'Suspend this user? Their dashboard sessions and unused login tokens will be revoked.'
+        : 'Restore this user’s access? Existing trades will not be changed.';
+      if (!confirm(prompt)) return;
+      button.disabled = true;
+      try {
+        await api(`/api/admin/users/${encodeURIComponent(userId)}/${action}`, { method: 'POST' });
+        await refreshAll();
+      } catch (error) {
+        showError(error instanceof Error ? error.message : 'Unable to update user access.');
+        button.disabled = false;
+      }
+    });
+
+    (async () => {
+      try {
+        if (await authenticate()) return;
+        await refreshAll();
+      } catch (error) {
+        showError(error instanceof Error ? error.message : 'Admin authentication failed.');
+      }
+    })();
+  </script>
+</body>
+</html>

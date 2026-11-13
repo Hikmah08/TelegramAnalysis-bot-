@@ -37,9 +37,11 @@ interface CoinbaseSpot {
   message?: unknown;
 }
 
+export type MarketInstrumentCategory = 'CRYPTO' | 'FOREX' | 'METAL';
+
 export class MarketDataError extends Error {
   constructor(symbol: string, failures: string[]) {
-    super(`No crypto price available for ${symbol}. ${failures.join('; ')}`);
+    super(`No market price available for ${symbol}. ${failures.join('; ')}`);
     this.name = 'MarketDataError';
   }
 }
@@ -53,7 +55,7 @@ function resolveCryptoPair(symbol: string): CryptoPair | null {
   for (const quote of ['USDT', 'BUSD', 'USD']) {
     if (symbol.endsWith(quote)) {
       const base = symbol.slice(0, -quote.length);
-      if (base && (quote !== 'USD' || CRYPTO_BASES.has(base))) {
+      if (CRYPTO_BASES.has(base)) {
         return {
           base,
           quote,
@@ -75,13 +77,38 @@ function resolveCryptoPair(symbol: string): CryptoPair | null {
   return null;
 }
 
+function resolveMetalPair(symbol: string): string | null {
+  if (symbol === 'XAUUSD') return 'XAU/USD';
+  if (symbol === 'XAGUSD') return 'XAG/USD';
+  return null;
+}
+
+export function getMarketInstrumentCategory(value: string): MarketInstrumentCategory | null {
+  const symbol = value.toUpperCase().trim().replace(/[/-]/g, '');
+  if (resolveCryptoPair(symbol)) return 'CRYPTO';
+  if (resolveMetalPair(symbol)) return 'METAL';
+
+  const currencies = new Set([
+    'USD', 'EUR', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD', 'NZD',
+    'CNY', 'CNH', 'HKD', 'SGD', 'SEK', 'NOK', 'DKK', 'PLN',
+    'MXN', 'ZAR', 'TRY',
+  ]);
+  if (symbol.length === 6 &&
+      currencies.has(symbol.slice(0, 3)) &&
+      currencies.has(symbol.slice(3)) &&
+      symbol.slice(0, 3) !== symbol.slice(3)) {
+    return 'FOREX';
+  }
+  return null;
+}
+
 function sanitizeErrorDescription(value: unknown): string {
   if (typeof value !== 'string' || value.length === 0) {
     return 'No provider error description';
   }
 
   return value
-    .replace(/(api[_-]?key|token|secret)\s*[:=]\s*["']?[^,\s"'&]+/gi, '$1=[redacted]')
+    .replace(/(api[_-]?key|apikey|token|secret)\s*[:=]\s*["']?[^,\s"'&]+/gi, '$1=[redacted]')
     .replace(/\b\d{5,}:[A-Za-z0-9_-]{20,}\b/g, '[redacted]')
     .replace(/[\r\n\t]+/g, ' ')
     .slice(0, 200);
@@ -243,11 +270,82 @@ async function fetchCoinbasePrice(requestedSymbol: string, pair: CryptoPair): Pr
   };
 }
 
-export async function fetchCurrentPrice(symbol: string): Promise<PriceQuote | null> {
+async function fetchTwelveDataMetalPrice(
+  requestedSymbol: string,
+  providerSymbol: string,
+  apiKey: string | undefined
+): Promise<PriceQuote> {
+  if (!apiKey) {
+    const failure = logProviderFailure(
+      'Twelve Data',
+      requestedSymbol,
+      null,
+      'TWELVE_DATA_API_KEY is not configured'
+    );
+    throw new MarketDataError(requestedSymbol, [failure]);
+  }
+
+  let response: Response;
+  try {
+    const url = new URL('https://api.twelvedata.com/price');
+    url.searchParams.set('symbol', providerSymbol);
+    url.searchParams.set('apikey', apiKey);
+    response = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
+  } catch {
+    const failure = logProviderFailure('Twelve Data', requestedSymbol, null, 'Network request failed');
+    throw new MarketDataError(requestedSymbol, [failure]);
+  }
+
+  const parsed = await readJsonResponse<{ price?: unknown; message?: unknown; code?: unknown; status?: unknown }>(
+    response,
+    'Twelve Data',
+    requestedSymbol,
+    body => body.message || body.code
+  );
+  const price = Number(parsed.body?.price);
+  if (!parsed.body || parsed.body.status === 'error' || !Number.isFinite(price) || price <= 0) {
+    const failure = parsed.failure || logProviderFailure(
+      'Twelve Data',
+      requestedSymbol,
+      response.status,
+      typeof parsed.body?.message === 'string'
+        ? parsed.body.message
+        : 'Malformed latest-price response'
+    );
+    throw new MarketDataError(requestedSymbol, [failure]);
+  }
+
+  return {
+    symbol: requestedSymbol,
+    price,
+    timestamp: new Date().toISOString(),
+    source: 'Twelve Data Latest Price',
+    isStale: false,
+  };
+}
+
+export async function fetchCurrentPrice(
+  symbol: string,
+  apiKey?: string
+): Promise<PriceQuote | null> {
   const requestedSymbol = symbol.toUpperCase().trim();
   if (!/^[A-Z0-9._=-]{1,20}$/.test(requestedSymbol)) {
     logProviderFailure('symbol validation', requestedSymbol, null, 'Invalid market symbol format');
     return null;
+  }
+
+  const metalPair = resolveMetalPair(requestedSymbol);
+  if (metalPair) {
+    return fetchTwelveDataMetalPrice(requestedSymbol, metalPair, apiKey);
+  }
+  if (requestedSymbol === 'XAUUSDT') {
+    const failure = logProviderFailure(
+      'Twelve Data',
+      requestedSymbol,
+      null,
+      'No verified XAU/USDT listing; XAU/USD is a separate instrument'
+    );
+    throw new MarketDataError(requestedSymbol, [failure]);
   }
 
   const cryptoPair = resolveCryptoPair(requestedSymbol);
@@ -267,13 +365,7 @@ export async function fetchCurrentPrice(symbol: string): Promise<PriceQuote | nu
 
   let yahooSymbol = requestedSymbol;
   let sourceDesc = 'Yahoo Finance';
-  if (requestedSymbol === 'XAUUSD') {
-    yahooSymbol = 'GC=F';
-    sourceDesc = 'Yahoo COMEX Gold Futures (GC=F)';
-  } else if (requestedSymbol === 'XAGUSD') {
-    yahooSymbol = 'SI=F';
-    sourceDesc = 'Yahoo COMEX Silver Futures (SI=F)';
-  } else if (requestedSymbol.length === 6 && !requestedSymbol.endsWith('USDT')) {
+  if (requestedSymbol.length === 6 && !requestedSymbol.endsWith('USDT')) {
     yahooSymbol = `${requestedSymbol}=X`;
     sourceDesc = 'Yahoo FX';
   }

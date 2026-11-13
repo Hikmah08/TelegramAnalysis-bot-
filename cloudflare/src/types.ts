@@ -61,6 +61,7 @@ export interface Env {
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_ADMIN_IDS?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
+  TWELVE_DATA_API_KEY?: string;
   DASHBOARD_SECRET_KEY?: string;
   DASHBOARD_URL?: string;
   DEFAULT_STARTING_BALANCE?: string;

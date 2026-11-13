@@ -3,6 +3,7 @@ import { handleTelegramUpdate, hashDashboardToken } from './telegram';
 import { runPositionMonitoring } from './monitor';
 import { fetchCurrentPrice, MarketDataError } from './market_data';
 import { handleDashboardRequest } from './dashboard.js';
+import { handleAdminRequest } from './admin.js';
 
 export default {
   // 1. HTTP Request Handler (REST API, Webhook, Dashboard API)
@@ -33,6 +34,9 @@ export default {
         { headers: { 'Content-Type': 'application/json' } }
       );
     }
+
+    const adminResponse = await handleAdminRequest(request, env, hashDashboardToken);
+    if (adminResponse) return adminResponse;
 
     const dashboardResponse = await handleDashboardRequest(request, env, hashDashboardToken);
     if (dashboardResponse) return dashboardResponse;
@@ -75,7 +79,7 @@ export default {
     if (path.startsWith('/api/market/quote/')) {
       const sym = path.replace('/api/market/quote/', '');
       try {
-        const quote = await fetchCurrentPrice(sym);
+        const quote = await fetchCurrentPrice(sym, env.TWELVE_DATA_API_KEY);
         return new Response(JSON.stringify(quote || { error: 'Not found' }), {
           headers: { 'Content-Type': 'application/json' },
         });

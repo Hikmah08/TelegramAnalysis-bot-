@@ -13,6 +13,7 @@ function createEnv({ tokenExpiresAt = new Date(Date.now() + 60_000).toISOString(
       expires_at: tokenExpiresAt,
       is_used: 0,
     },
+    users: new Map([['user-42', { status: 'ACTIVE' }]]),
     sessions: [],
     queries: [],
     assetRequests: [],
@@ -36,15 +37,17 @@ function createEnv({ tokenExpiresAt = new Date(Date.now() + 60_000).toISOString(
                 state.queries.push({ query, values });
                 if (query.startsWith('UPDATE dashboard_auth_tokens')) {
                   const [hash, now] = values;
-                  if (state.token?.token_hash !== hash || state.token.is_used !== 0 || state.token.expires_at <= now) {
+                  if (state.token?.token_hash !== hash || state.token.is_used !== 0 || state.token.expires_at <= now
+                    || state.users.get(state.token.user_id)?.status !== 'ACTIVE') {
                     return null;
                   }
                   state.token.is_used = 1;
                   return { user_id: state.token.user_id };
                 }
-                if (query.startsWith('SELECT * FROM dashboard_sessions')) {
+                if (query.includes('FROM dashboard_sessions')) {
                   const [sessionId, now] = values;
-                  return state.sessions.find(item => item.session_id === sessionId && item.expires_at > now) || null;
+                  const session = state.sessions.find(item => item.session_id === sessionId && item.expires_at > now);
+                  return session && state.users.get(session.user_id)?.status === 'ACTIVE' ? session : null;
                 }
                 if (query.startsWith('SELECT * FROM user_balances')) return { current_balance: 11000, starting_balance: 10000 };
                 return null;
@@ -85,6 +88,7 @@ function request(path, { method = 'GET', body, cookie } = {}) {
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+
 }
 
 test('dashboard routes serve the existing page for login and dashboard navigation', async () => {
@@ -188,4 +192,29 @@ test('summary data requires a valid session and scopes all queries to that user'
   assert.equal(data.balance.current_balance, 11000);
   assert.ok(state.queries.filter(item => /user_balances|paper_positions|user_watchlist/.test(item.query))
     .every(item => item.values[0] === 'user-42'));
+});
+
+test('suspended users cannot exchange a login token or use an existing dashboard session', async () => {
+  const { env, state } = createEnv();
+  state.users.get('user-42').status = 'SUSPENDED';
+
+  const tokenResponse = await handleDashboardRequest(
+    request('/api/auth/token', { method: 'POST', body: { token: TOKEN } }),
+    env,
+    hashToken
+  );
+  assert.equal(tokenResponse.status, 401);
+  assert.equal(state.token.is_used, 0);
+
+  state.sessions.push({
+    session_id: 'a'.repeat(64),
+    user_id: 'user-42',
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+  });
+  const summaryResponse = await handleDashboardRequest(
+    request('/api/user/summary', { cookie: `session_id=${'a'.repeat(64)}` }),
+    env,
+    hashToken
+  );
+  assert.equal(summaryResponse.status, 401);
 });

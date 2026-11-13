@@ -3,6 +3,14 @@ import {
   formatIctOpportunity,
   IctAnalysisError,
 } from './ict_analysis.js';
+import {
+  fetchCurrentPrice,
+  getMarketInstrumentCategory,
+  MarketDataError,
+} from './market_data.js';
+
+const WATCHLIST_LIMIT = 20;
+const PENDING_FLOW_KEY = 'telegram_pending_flow';
 
 function escapeHtml(value) {
   return value.replace(/[&<>]/g, character => ({
@@ -25,7 +33,7 @@ function opportunityKeyboard(signalId) {
 }
 
 async function sendIctAnalysis(symbol, userId, chatId, botToken, env) {
-  const analysis = await fetchIctAnalysis(symbol);
+  const analysis = await fetchIctAnalysis(symbol, env.TWELVE_DATA_API_KEY);
   if (analysis.opportunities.length === 0) {
     await sendTelegramMessage(
       botToken,
@@ -35,34 +43,215 @@ async function sendIctAnalysis(symbol, userId, chatId, botToken, env) {
     return;
   }
 
+  const opportunity = analysis.opportunities[0];
   const createdAt = new Date();
   const expiresAt = new Date(createdAt.getTime() + 30 * 60 * 1000).toISOString();
-  for (const opportunity of analysis.opportunities) {
-    const signalId = crypto.randomUUID().replace(/-/g, '');
-    await env.DB.prepare(
-      `INSERT INTO signals_queue
+  const signalId = crypto.randomUUID().replace(/-/g, '');
+  await env.DB.prepare(
+    `INSERT INTO signals_queue
        (signal_id, user_id, symbol, direction, entry_price, stop_loss, take_profit, status, audit_notes, created_at, expires_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)`
-    ).bind(
-      signalId,
-      userId,
-      symbol,
-      opportunity.direction,
-      opportunity.entryPrice,
-      opportunity.stopLoss,
-      opportunity.takeProfit,
-      JSON.stringify(opportunity.auditTrail),
-      createdAt.toISOString(),
-      expiresAt
-    ).run();
+  ).bind(
+    signalId,
+    userId,
+    symbol,
+    opportunity.direction,
+    opportunity.entryPrice,
+    opportunity.stopLoss,
+    opportunity.takeProfit,
+    JSON.stringify(opportunity.auditTrail),
+    createdAt.toISOString(),
+    expiresAt
+  ).run();
 
+  await sendTelegramMessage(
+    botToken,
+    chatId,
+    formatIctOpportunity(symbol, opportunity),
+    opportunityKeyboard(signalId)
+  );
+}
+
+function telegramOkResponse() {
+  return new Response(JSON.stringify({ ok: true }), {
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+async function setPendingFlow(env, userId, action) {
+  const value = JSON.stringify({
+    action,
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+  });
+  await env.DB.prepare(
+    `INSERT INTO user_settings (user_id, key, value) VALUES (?, ?, ?)
+     ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value`
+  ).bind(userId, PENDING_FLOW_KEY, value).run();
+}
+
+async function getPendingFlow(env, userId) {
+  const row = await env.DB.prepare(
+    'SELECT value FROM user_settings WHERE user_id = ? AND key = ?'
+  ).bind(userId, PENDING_FLOW_KEY).first();
+  if (!row?.value) return null;
+
+  let pending;
+  try {
+    pending = JSON.parse(row.value);
+  } catch {
+    await env.DB.prepare(
+      'DELETE FROM user_settings WHERE user_id = ? AND key = ?'
+    ).bind(userId, PENDING_FLOW_KEY).run();
+    return null;
+  }
+  if (!pending.expiresAt || Date.parse(pending.expiresAt) <= Date.now()) {
+    await env.DB.prepare(
+      'DELETE FROM user_settings WHERE user_id = ? AND key = ?'
+    ).bind(userId, PENDING_FLOW_KEY).run();
+    return null;
+  }
+  return pending.action;
+}
+
+async function clearPendingFlow(env, userId) {
+  await env.DB.prepare(
+    'DELETE FROM user_settings WHERE user_id = ? AND key = ?'
+  ).bind(userId, PENDING_FLOW_KEY).run();
+}
+
+async function readWatchlist(env, userId) {
+  const result = await env.DB.prepare(
+    'SELECT symbol, asset_class FROM user_watchlist WHERE user_id = ? AND is_active = 1 ORDER BY symbol'
+  ).bind(userId).all();
+  return result.results || [];
+}
+
+async function sendWatchlist(botToken, chatId, userId, env) {
+  const watchlist = await readWatchlist(env, userId);
+  const keyboard = {
+    inline_keyboard: [
+      ...watchlist.map(item => [
+        { text: `Analyze ${item.symbol}`, callback_data: `watchlist_analyze_${item.symbol}` },
+      ]),
+      [
+        { text: 'Add Pair', callback_data: 'watchlist_add' },
+        { text: 'Remove Pair', callback_data: 'watchlist_remove_menu' },
+      ],
+      [{ text: 'Back to Menu', callback_data: 'menu_back' }],
+    ],
+  };
+  const listText = watchlist.length
+    ? watchlist.map(item => `• <code>${escapeHtml(item.symbol)}</code> (${item.asset_class})`).join('\n')
+    : 'Your watchlist is empty.';
+  await sendTelegramMessage(
+    botToken,
+    chatId,
+    `📋 <b>Your Watchlist:</b>\n${listText}\n\nSelect a saved pair to run full ICT/SMC analysis.`,
+    keyboard
+  );
+}
+
+async function sendWatchlistRemovalMenu(botToken, chatId, userId, env) {
+  const watchlist = await readWatchlist(env, userId);
+  const keyboard = {
+    inline_keyboard: [
+      ...watchlist.map(item => [
+        { text: `Remove ${item.symbol}`, callback_data: `watchlist_remove_${item.symbol}` },
+      ]),
+      [{ text: 'Back to Watchlist', callback_data: 'watchlist_show' }],
+      [{ text: 'Back to Menu', callback_data: 'menu_back' }],
+    ],
+  };
+  await sendTelegramMessage(
+    botToken,
+    chatId,
+    watchlist.length
+      ? 'Select the saved pair to remove from your watchlist.'
+      : 'Your watchlist is empty; there are no pairs to remove.',
+    keyboard
+  );
+}
+
+function quoteCurrency(symbol) {
+  const quote = ['USDT', 'USDC', 'BUSD', 'USD', 'EUR', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD', 'NZD']
+    .find(currency => symbol.endsWith(currency));
+  return quote || (getMarketInstrumentCategory(symbol) === 'CRYPTO' ? 'USDT' : 'unknown');
+}
+
+function unsupportedInstrumentMessage(symbol) {
+  if (symbol === 'XAUUSDT') {
+    return 'XAUUSDT is not listed by the supported spot-data provider. XAUUSD is a separate quote pair, and the bot will not substitute it.';
+  }
+  return 'That instrument is not supported. Try BTCUSDT, EURUSD, XAUUSD or XAGUSD.';
+}
+
+async function sendPriceQuote(botToken, chatId, symbol, env) {
+  try {
+    const quote = await fetchCurrentPrice(symbol, env.TWELVE_DATA_API_KEY);
+    if (!quote) {
+      await sendTelegramMessage(botToken, chatId, `No latest price is available for <code>${escapeHtml(symbol)}</code>.`);
+      return;
+    }
+    const price = quote.price.toLocaleString('en-US', { maximumFractionDigits: 8 });
     await sendTelegramMessage(
       botToken,
       chatId,
-      formatIctOpportunity(symbol, opportunity),
-      opportunityKeyboard(signalId)
+      `📈 <b>LIVE MARKET PRICE</b>\n\n` +
+        `Instrument: <code>${escapeHtml(symbol)}</code>\n` +
+        `Price: <b>${price} ${quoteCurrency(symbol)}</b>\n` +
+        `Provider: ${escapeHtml(quote.source)}\n` +
+        `Updated: ${escapeHtml(quote.timestamp)}`,
+      {
+        inline_keyboard: [
+          [{ text: 'Refresh Price', callback_data: `price_refresh_${symbol}` }],
+          [{ text: 'Back to Menu', callback_data: 'menu_back' }],
+        ],
+      }
     );
+  } catch (error) {
+    if (!(error instanceof MarketDataError)) throw error;
+    await sendTelegramMessage(botToken, chatId, escapeHtml(error.message));
   }
+}
+
+async function saveWatchlistPair(botToken, chatId, userId, symbol, env) {
+  const normalizedSymbol = symbol.toUpperCase().trim().replace(/[/-]/g, '');
+  const assetClass = getMarketInstrumentCategory(normalizedSymbol);
+  if (!assetClass) {
+    await sendTelegramMessage(botToken, chatId, unsupportedInstrumentMessage(normalizedSymbol));
+    return false;
+  }
+
+  const existing = await env.DB.prepare(
+    'SELECT symbol FROM user_watchlist WHERE user_id = ? AND symbol = ? AND is_active = 1'
+  ).bind(userId, normalizedSymbol).first();
+  if (existing) {
+    await clearPendingFlow(env, userId);
+    await sendTelegramMessage(botToken, chatId, `<code>${escapeHtml(normalizedSymbol)}</code> is already on your watchlist.`);
+    await sendWatchlist(botToken, chatId, userId, env);
+    return true;
+  }
+
+  const count = await env.DB.prepare(
+    'SELECT COUNT(*) AS count FROM user_watchlist WHERE user_id = ? AND is_active = 1'
+  ).bind(userId).first();
+  if (Number(count?.count || 0) >= WATCHLIST_LIMIT) {
+    await clearPendingFlow(env, userId);
+    await sendTelegramMessage(botToken, chatId, `Your watchlist is limited to ${WATCHLIST_LIMIT} pairs.`);
+    await sendWatchlist(botToken, chatId, userId, env);
+    return true;
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO user_watchlist (user_id, symbol, asset_class, is_active, added_at)
+     VALUES (?, ?, ?, 1, ?)
+     ON CONFLICT(user_id, symbol) DO UPDATE SET
+       asset_class = excluded.asset_class, is_active = 1, added_at = excluded.added_at`
+  ).bind(userId, normalizedSymbol, assetClass, new Date().toISOString()).run();
+  await clearPendingFlow(env, userId);
+  await sendTelegramMessage(botToken, chatId, `Added <code>${escapeHtml(normalizedSymbol)}</code> to your watchlist.`);
+  await sendWatchlist(botToken, chatId, userId, env);
+  return true;
 }
 
 export async function hashDashboardToken(token) {
@@ -157,6 +346,61 @@ export async function sendTelegramMessage(
   return result.ok;
 }
 
+function configuredAdminIds(env) {
+  return new Set((env.TELEGRAM_ADMIN_IDS || '')
+    .split(',')
+    .map(id => id.trim())
+    .filter(id => /^\d+$/.test(id)));
+}
+
+async function recordUserInteraction(userId, chatId, username, firstName, command, env) {
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const isAdmin = configuredAdminIds(env).has(userId);
+  const inserted = await env.DB.prepare(
+    `INSERT INTO users (user_id, chat_id, username, first_name, role, status, registered_at, last_active_at)
+     VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, ?)
+     ON CONFLICT(user_id) DO NOTHING`
+  ).bind(userId, chatId, username, firstName, isAdmin ? 'ADMIN' : 'USER', nowIso, nowIso).run();
+
+  await env.DB.prepare(
+    `UPDATE users
+     SET chat_id = ?, username = COALESCE(?, username), first_name = COALESCE(?, first_name),
+         last_active_at = CASE WHEN last_active_at <= ? THEN ? ELSE last_active_at END,
+         role = CASE WHEN ? = 1 THEN 'ADMIN' ELSE role END
+     WHERE user_id = ?`
+  ).bind(
+    chatId,
+    username,
+    firstName,
+    new Date(now.getTime() - 60_000).toISOString(),
+    nowIso,
+    isAdmin ? 1 : 0,
+    userId
+  ).run();
+
+  const user = await env.DB.prepare(
+    'SELECT status, role FROM users WHERE user_id = ?'
+  ).bind(userId).first();
+
+  if (inserted.meta?.changes === 1) {
+    await env.DB.prepare(
+      'INSERT INTO bot_activity (user_id, command_name, event_type, created_at) VALUES (?, NULL, ?, ?)'
+    ).bind(userId, 'USER_JOINED', nowIso).run();
+  }
+  if (command) {
+    await env.DB.prepare(
+      'INSERT INTO bot_activity (user_id, command_name, event_type, created_at) VALUES (?, ?, ?, ?)'
+    ).bind(userId, command, 'COMMAND_USED', nowIso).run();
+  }
+
+  return {
+    status: user?.status || 'ACTIVE',
+    role: user?.role || (isAdmin ? 'ADMIN' : 'USER'),
+    isAdmin: isAdmin && user?.role === 'ADMIN' && user?.status === 'ACTIVE',
+  };
+}
+
 export async function handleTelegramUpdate(
   update,
   env
@@ -173,11 +417,46 @@ export async function handleTelegramUpdate(
     const cb = update.callback_query;
     const userId = String(cb.from.id);
     const chatId = cb.message?.chat.id || cb.from.id;
+    const user = await recordUserInteraction(
+      userId,
+      String(chatId),
+      cb.from.username || null,
+      cb.from.first_name || null,
+      undefined,
+      env
+    );
+    if (user.status === 'SUSPENDED') {
+      await callTelegramApi(botToken, 'answerCallbackQuery', {
+        callback_query_id: cb.id,
+        text: 'Your bot access is suspended. Contact an administrator.',
+        show_alert: true,
+      });
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
     const data = cb.data || '';
     const callbackAction = data.startsWith('close_pos_')
       ? 'close_position'
       : data === 'menu_analyze_menu'
         ? 'analysis_menu'
+        : data === 'watchlist_add'
+          ? 'watchlist_add'
+          : data === 'watchlist_remove_menu'
+            ? 'watchlist_remove_menu'
+            : data.startsWith('watchlist_remove_')
+              ? 'watchlist_remove'
+              : data.startsWith('watchlist_analyze_')
+                ? 'watchlist_analyze'
+                : data === 'watchlist_show'
+                  ? 'watchlist_show'
+                  : data === 'price_start'
+                    ? 'price_start'
+                    : data.startsWith('price_refresh_')
+                      ? 'price_refresh'
+                      : data === 'menu_back'
+                        ? 'menu_back'
         : data.startsWith('analyze_pair_')
           ? 'analyze_pair'
           : data.startsWith('view_analysis_')
@@ -189,7 +468,74 @@ export async function handleTelegramUpdate(
 
     let callbackAnswer = '';
     let callbackAlert = false;
-    if (data === 'menu_analyze_menu') {
+    if (data === 'watchlist_add') {
+      await setPendingFlow(env, userId, 'watchlist_add_pair');
+      await sendTelegramMessage(botToken, chatId, 'Enter a supported trading symbol, for example BTCUSDT, EURUSD, XAUUSD or XAGUSD.');
+      callbackAnswer = 'Enter a trading symbol.';
+    } else if (data === 'watchlist_remove_menu') {
+      await sendWatchlistRemovalMenu(botToken, chatId, userId, env);
+      callbackAnswer = 'Choose a saved pair to remove.';
+    } else if (data.startsWith('watchlist_remove_')) {
+      const symbol = data.slice('watchlist_remove_'.length).toUpperCase();
+      const result = await env.DB.prepare(
+        'UPDATE user_watchlist SET is_active = 0 WHERE user_id = ? AND symbol = ? AND is_active = 1'
+      ).bind(userId, symbol).run();
+      if (result.meta?.changes) {
+        await sendTelegramMessage(botToken, chatId, `Removed <code>${escapeHtml(symbol)}</code> from your watchlist.`);
+        callbackAnswer = 'Pair removed.';
+      } else {
+        callbackAnswer = 'Saved pair not found.';
+        callbackAlert = true;
+      }
+      await sendWatchlist(botToken, chatId, userId, env);
+    } else if (data.startsWith('watchlist_analyze_')) {
+      const symbol = data.slice('watchlist_analyze_'.length).toUpperCase();
+      const saved = await env.DB.prepare(
+        'SELECT symbol FROM user_watchlist WHERE user_id = ? AND symbol = ? AND is_active = 1'
+      ).bind(userId, symbol).first();
+      if (!saved) {
+        callbackAnswer = 'Saved pair not found.';
+        callbackAlert = true;
+      } else {
+        try {
+          await sendIctAnalysis(symbol, userId, chatId, botToken, env);
+          callbackAnswer = 'Analysis complete.';
+        } catch (error) {
+          if (!(error instanceof IctAnalysisError)) throw error;
+          console.warn('[Telegram] ICT analysis unavailable', { symbol, description: error.message });
+          await sendTelegramMessage(botToken, chatId, escapeHtml(error.message));
+          callbackAnswer = 'Analysis data is unavailable.';
+          callbackAlert = true;
+        }
+      }
+    } else if (data === 'watchlist_show') {
+      await sendWatchlist(botToken, chatId, userId, env);
+      callbackAnswer = 'Watchlist loaded.';
+    } else if (data === 'price_start') {
+      await setPendingFlow(env, userId, 'price_pair');
+      await sendTelegramMessage(botToken, chatId, 'Which trading pair would you like to check?');
+      callbackAnswer = 'Enter a trading pair.';
+    } else if (data.startsWith('price_refresh_')) {
+      const symbol = data.slice('price_refresh_'.length).toUpperCase();
+      if (!getMarketInstrumentCategory(symbol)) {
+        callbackAnswer = 'Unsupported instrument.';
+        callbackAlert = true;
+      } else {
+        await sendPriceQuote(botToken, chatId, symbol, env);
+        callbackAnswer = 'Latest price refreshed.';
+      }
+    } else if (data === 'menu_back') {
+      await sendTelegramMessage(botToken, chatId, 'Choose an action:', {
+        inline_keyboard: [
+          [
+            { text: 'Analysis', callback_data: 'menu_analyze_menu' },
+            { text: 'Watchlist', callback_data: 'watchlist_show' },
+          ],
+          [{ text: 'Price', callback_data: 'price_start' }],
+        ],
+      });
+      callbackAnswer = 'Menu loaded.';
+    } else if (data === 'menu_analyze_menu') {
       const watchlist = await env.DB.prepare(
         'SELECT symbol FROM user_watchlist WHERE user_id = ? AND is_active = 1 ORDER BY symbol LIMIT 6'
       ).bind(userId).all();
@@ -377,20 +723,18 @@ export async function handleTelegramUpdate(
       callbackPayload.show_alert = callbackAlert;
     }
     await callTelegramApi(botToken, 'answerCallbackQuery', callbackPayload);
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return telegramOkResponse();
   }
 
   // Handle text messages
-  if (!update.message || !update.message.text) {
+  if (!update.message) {
     return new Response(JSON.stringify({ ok: true }), {
       headers: { 'Content-Type': 'application/json' },
     });
   }
 
   const msg = update.message;
-  const text = msg.text.trim();
+  const text = typeof msg.text === 'string' ? msg.text.trim() : '';
   const commandMatch = /^\/[a-z0-9_]+(?:@[a-z0-9_]+)?/i.exec(text);
   const command = commandMatch?.[0].split('@')[0].toLowerCase();
   const commandArgs = commandMatch ? text.slice(commandMatch[0].length).trim().split(/\s+/).filter(Boolean) : [];
@@ -400,12 +744,38 @@ export async function handleTelegramUpdate(
   const username = msg.from.username || null;
   const firstName = msg.from.first_name || null;
   const nowIso = new Date().toISOString();
+  const user = await recordUserInteraction(userId, chatId, username, firstName, command, env);
 
-  await env.DB.prepare(
-    `INSERT INTO users (user_id, chat_id, username, first_name, role, status, registered_at, last_active_at)
-     VALUES (?, ?, ?, ?, 'USER', 'ACTIVE', ?, ?)
-     ON CONFLICT(user_id) DO UPDATE SET last_active_at = ?, chat_id = ?`
-  ).bind(userId, chatId, username, firstName, nowIso, nowIso, nowIso, chatId).run();
+  if (user.status === 'SUSPENDED') {
+    await sendTelegramMessage(botToken, chatId, 'Your bot access is suspended. Contact an administrator.');
+    return new Response(JSON.stringify({ ok: true }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (!text) {
+    return new Response(JSON.stringify({ ok: true }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (!command) {
+    const pendingAction = await getPendingFlow(env, userId);
+    if (pendingAction === 'watchlist_add_pair') {
+      await saveWatchlistPair(botToken, chatId, userId, text, env);
+      return telegramOkResponse();
+    }
+    if (pendingAction === 'price_pair') {
+      const symbol = text.toUpperCase().trim().replace(/[/-]/g, '');
+      if (!getMarketInstrumentCategory(symbol)) {
+        await sendTelegramMessage(botToken, chatId, unsupportedInstrumentMessage(symbol));
+        return telegramOkResponse();
+      }
+      await clearPendingFlow(env, userId);
+      await sendPriceQuote(botToken, chatId, symbol, env);
+      return telegramOkResponse();
+    }
+  }
 
   const startingBal = parseFloat(env.DEFAULT_STARTING_BALANCE || '10000.0');
   await env.DB.prepare(
@@ -422,6 +792,7 @@ export async function handleTelegramUpdate(
       `• /positions - View your open paper positions\n` +
       `• /history - View closed paper trades\n` +
       `• /watchlist - View your monitored watchlist\n` +
+      `• /price - Get a live market price\n` +
       `• /dashboard - One-click secure login token for Web Dashboard\n` +
       `• /analyze SYMBOL - Run full multi-timeframe ICT/SMC analysis\n` +
       `• /menu - Display this command overview\n` +
@@ -430,6 +801,9 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(botToken, chatId, welcome, {
       inline_keyboard: [[{ text: 'Analysis', callback_data: 'menu_analyze_menu' }]],
     });
+  } else if (command === '/price') {
+    await setPendingFlow(env, userId, 'price_pair');
+    await sendTelegramMessage(botToken, chatId, 'Which trading pair would you like to check?');
   } else if (command === '/analyze' || command === '/scan') {
     const symbol = commandArgs[0]?.toUpperCase();
     if (!symbol) {
@@ -507,16 +881,26 @@ export async function handleTelegramUpdate(
       await sendTelegramMessage(botToken, chatId, lines.join('\n'));
     }
   } else if (command === '/watchlist') {
-    const watchlist = await env.DB.prepare(
-      'SELECT symbol, asset_class FROM user_watchlist WHERE user_id = ? AND is_active = 1 ORDER BY symbol'
-    ).bind(userId).all();
-
-    if (!watchlist.results || watchlist.results.length === 0) {
-      await sendTelegramMessage(botToken, chatId, '📋 Your watchlist is empty.');
+    await sendWatchlist(botToken, chatId, userId, env);
+  } else if (command === '/admin') {
+    if (!user.isAdmin) {
+      await sendTelegramMessage(botToken, chatId, 'Admin access is not enabled for this Telegram account.');
     } else {
-      const symbols = watchlist.results
-        .map(item => `• <code>${item.symbol}</code> (${item.asset_class})`);
-      await sendTelegramMessage(botToken, chatId, `📋 <b>Your Watchlist:</b>\n${symbols.join('\n')}`);
+      const token = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
+      const tokenHash = await hashDashboardToken(token);
+      const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+      await env.DB.prepare(
+        'INSERT INTO dashboard_auth_tokens (token_hash, user_id, created_at, expires_at, is_used) VALUES (?, ?, ?, ?, 0)'
+      ).bind(tokenHash, userId, nowIso, expiresAt).run();
+
+      const adminUrl = `${env.DASHBOARD_URL || 'http://localhost:8000'}/admin?token=${token}`;
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        `🔐 <b>Admin Control Dashboard</b>\n\n` +
+          `This single-use administrator link expires in 15 minutes.\n\n` +
+          `🔗 <a href="${adminUrl}">Open Admin Control</a>`
+      );
     }
   } else if (command === '/dashboard') {
     const token = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');

@@ -14,6 +14,9 @@ class MockD1 {
       user_settings: new Map(),
       signals_queue: new Map(),
       dashboard_auth_tokens: new Map(),
+      bot_activity: [],
+      dashboard_sessions: new Map(),
+      admin_audit_log: [],
       balance_transactions: [],
       outbox_notifications: [],
     };
@@ -27,7 +30,51 @@ class MockD1 {
           sql,
           params,
           async run() {
-            if (sql.includes('INSERT INTO dashboard_auth_tokens')) {
+            if (sql.includes('INSERT INTO users')) {
+              const [userId, chatId, username, firstName, role, registeredAt, lastActiveAt] = params;
+              if (!self.tables.users.has(userId)) {
+                self.tables.users.set(userId, {
+                  user_id: userId, chat_id: chatId, username, first_name: firstName,
+                  role, status: 'ACTIVE', registered_at: registeredAt, last_active_at: lastActiveAt,
+                });
+
+                return { success: true, meta: { changes: 1 } };
+              }
+              return { success: true, meta: { changes: 0 } };
+            } else if (sql.includes('UPDATE users')) {
+              const [chatId, username, firstName, cutoff, now, isAdmin, userId] = params;
+              const user = self.tables.users.get(userId);
+              if (user) {
+                user.chat_id = chatId;
+                user.username = username ?? user.username;
+                user.first_name = firstName ?? user.first_name;
+                if (user.last_active_at <= cutoff) user.last_active_at = now;
+                if (isAdmin === 1) user.role = 'ADMIN';
+              }
+            } else if (sql.includes('INSERT INTO user_settings')) {
+              const [userId, key, value] = params;
+              self.tables.user_settings.set(`${userId}:${key}`, { user_id: userId, key, value });
+            } else if (sql.includes('DELETE FROM user_settings')) {
+              self.tables.user_settings.delete(`${params[0]}:${params[1]}`);
+            } else if (sql.includes('INSERT INTO user_watchlist')) {
+              const [userId, symbol, assetClass, addedAt] = params;
+              self.tables.user_watchlist.set(`${userId}:${symbol}`, {
+                user_id: userId, symbol, asset_class: assetClass, is_active: 1, added_at: addedAt,
+              });
+            } else if (sql.includes('UPDATE user_watchlist SET is_active = 0')) {
+              const [userId, symbol] = params;
+              const item = self.tables.user_watchlist.get(`${userId}:${symbol}`);
+              if (!item || item.is_active !== 1) return { success: true, meta: { changes: 0 } };
+              item.is_active = 0;
+              return { success: true, meta: { changes: 1 } };
+            } else if (sql.includes('INSERT INTO bot_activity')) {
+              const [userId, commandName, eventType, createdAt] = sql.includes('VALUES (?, NULL, ?, ?)')
+                ? [params[0], null, params[1], params[2]]
+                : params;
+              self.tables.bot_activity.push({
+                user_id: userId, command_name: commandName, event_type: eventType, created_at: createdAt,
+              });
+            } else if (sql.includes('INSERT INTO dashboard_auth_tokens')) {
               const [tokenHash, userId, createdAt, expiresAt] = params;
               self.tables.dashboard_auth_tokens.set(tokenHash, { tokenHash, userId, createdAt, expiresAt });
             } else if (sql.includes('INSERT INTO signals_queue')) {
@@ -53,12 +100,27 @@ class MockD1 {
             return { success: true };
           },
           async first() {
+            if (sql.includes('SELECT status, role FROM users WHERE user_id = ?')) {
+              const user = self.tables.users.get(params[0]);
+              return user ? { status: user.status, role: user.role } : null;
+            }
             if (sql.includes('FROM signals_queue WHERE signal_id = ? AND user_id = ?')) {
               const signal = self.tables.signals_queue.get(params[0]);
               return signal?.user_id === params[1] ? signal : null;
             }
             if (sql.includes('FROM user_settings WHERE user_id = ? AND key = ?')) {
               return self.tables.user_settings.get(`${params[0]}:${params[1]}`) || null;
+            }
+            if (sql.includes('FROM user_watchlist WHERE user_id = ? AND symbol = ? AND is_active = 1')) {
+              const item = self.tables.user_watchlist.get(`${params[0]}:${params[1]}`);
+              return item?.is_active === 1 ? item : null;
+            }
+            if (sql.includes('SELECT COUNT(*) AS count FROM user_watchlist')) {
+              const userId = params[0];
+              return {
+                count: Array.from(self.tables.user_watchlist.values())
+                  .filter(item => item.user_id === userId && item.is_active === 1).length,
+              };
             }
             if (sql.includes('SELECT * FROM user_balances WHERE user_id = ?')) {
               const uId = params[0];
@@ -236,6 +298,11 @@ test('Telegram Webhook - Registration and /start Command', async () => {
     assert.ok(infoLogs.some(([message]) => message === '[Telegram] Received command /start'));
     assert.ok(infoLogs.some(([message, result]) => message === '[Telegram API]'
       && result.httpStatus === 200 && result.description === '' && result.ok === true));
+    assert.deepEqual(db.tables.bot_activity.map(event => [event.event_type, event.command_name]), [
+      ['USER_JOINED', null],
+      ['COMMAND_USED', '/start'],
+      ['COMMAND_USED', '/start'],
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
     console.info = originalInfo;
@@ -267,6 +334,8 @@ test('Telegram commands - Every supported command is routed', async () => {
     { command: '/positions', expected: /no open paper positions/i },
     { command: '/history', expected: /No completed paper trades/ },
     { command: '/watchlist', expected: /watchlist is empty/i },
+    { command: '/price', expected: /Which trading pair would you like to check/i },
+    { command: '/admin', expected: /Admin access is not enabled/ },
     { command: '/dashboard', expected: /One-Click Login/ },
     { command: '/analyze', expected: /Usage:.*analyze SYMBOL/s },
     { command: '/analyze BTCUSDT', expected: /No qualified ICT\/SMC setup is available.*BTCUSDT/i },
@@ -841,6 +910,346 @@ test('Telegram Webhook - Dashboard Login Token Is Stored Hashed', async () => {
     const tokenHash = createHash('sha256').update(rawToken).digest('hex');
     assert.equal(db.tables.dashboard_auth_tokens.has(tokenHash), true);
     assert.equal(db.tables.dashboard_auth_tokens.has(rawToken), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Telegram activity stores only command names without arguments', async () => {
+  const db = new MockD1();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ ok: true });
+  try {
+    await handleTelegramUpdate({
+      update_id: 66,
+      message: {
+        message_id: 66,
+        from: { id: 654321, is_bot: false, first_name: 'Activity', username: 'activity_user' },
+        chat: { id: 654321, type: 'private' },
+        text: '/balance private-argument-must-not-be-recorded',
+        date: 1699000000,
+      },
+    }, { DB: db, TELEGRAM_BOT_TOKEN: '12345:MOCK_TOKEN_SECRET' });
+
+    assert.deepEqual(db.tables.bot_activity.map(event => [event.event_type, event.command_name]), [
+      ['USER_JOINED', null],
+      ['COMMAND_USED', '/balance'],
+    ]);
+    assert.equal(JSON.stringify(db.tables.bot_activity).includes('private-argument'), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Telegram /admin only issues an administrator link to an allowlisted ID', async () => {
+  const db = new MockD1();
+  const env = {
+    DB: db,
+    TELEGRAM_BOT_TOKEN: '12345:MOCK_TOKEN_SECRET',
+    TELEGRAM_ADMIN_IDS: '654321',
+    DASHBOARD_URL: 'https://worker.example',
+  };
+  const originalFetch = globalThis.fetch;
+  let reply = '';
+  globalThis.fetch = async (_url, options) => {
+    reply = JSON.parse(options.body).text;
+    return Response.json({ ok: true });
+  };
+  try {
+    await handleTelegramUpdate({
+      update_id: 67,
+      message: {
+        message_id: 67,
+        from: { id: 654321, is_bot: false, first_name: 'Admin' },
+        chat: { id: 654321, type: 'private' },
+        text: '/admin',
+        date: 1699000000,
+      },
+    }, env);
+    assert.match(reply, /https:\/\/worker\.example\/admin\?token=[a-f0-9]{64}/);
+    const rawToken = reply.match(/token=([a-f0-9]{64})/)?.[1];
+    assert.ok(rawToken);
+    const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+    assert.equal(db.tables.dashboard_auth_tokens.has(tokenHash), true);
+    assert.equal(db.tables.dashboard_auth_tokens.has(rawToken), false);
+    assert.equal(db.tables.users.get('654321').role, 'ADMIN');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Suspended Telegram users cannot run commands or old trade callbacks', async () => {
+  const db = new MockD1();
+  db.tables.users.set('7654321', {
+    user_id: '7654321', chat_id: '7654321', username: null, first_name: 'Paused',
+    role: 'USER', status: 'SUSPENDED', registered_at: new Date().toISOString(),
+    last_active_at: new Date(Date.now() - 120_000).toISOString(),
+  });
+  const originalFetch = globalThis.fetch;
+  const apiCalls = [];
+  globalThis.fetch = async (url, options) => {
+    apiCalls.push({ url, payload: JSON.parse(options.body) });
+    return Response.json({ ok: true });
+  };
+  try {
+    const commandResult = await handleTelegramUpdate({
+      update_id: 68,
+      message: {
+        message_id: 68,
+        from: { id: 7654321, is_bot: false, first_name: 'Paused' },
+        chat: { id: 7654321, type: 'private' },
+        text: '/start',
+        date: 1699000000,
+      },
+    }, { DB: db, TELEGRAM_BOT_TOKEN: '12345:MOCK_TOKEN_SECRET' });
+    assert.equal(commandResult.status, 200);
+    assert.match(apiCalls[0].payload.text, /access is suspended/i);
+    assert.doesNotMatch(apiCalls[0].payload.text, /Welcome/);
+
+    const callbackResult = await handleTelegramUpdate({
+      update_id: 69,
+      callback_query: {
+        id: 'old-approval',
+        from: { id: 7654321, first_name: 'Paused' },
+        message: { message_id: 10, chat: { id: 7654321 } },
+        data: 'approve_old-signal',
+      },
+    }, { DB: db, TELEGRAM_BOT_TOKEN: '12345:MOCK_TOKEN_SECRET' });
+    assert.equal(callbackResult.status, 200);
+    assert.equal(apiCalls[1].url, 'https://api.telegram.org/bot12345:MOCK_TOKEN_SECRET/answerCallbackQuery');
+    assert.match(apiCalls[1].payload.text, /access is suspended/i);
+    assert.equal(db.tables.paper_positions.size, 0);
+    assert.equal(db.tables.signals_queue.size, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Telegram watchlist - Add and remove actions are user-scoped and the watchlist is interactive', async () => {
+  const db = new MockD1();
+  const originalFetch = globalThis.fetch;
+  const sentMessages = [];
+  globalThis.fetch = async (url, options) => {
+    if (url.startsWith('https://api.telegram.org/')) {
+      sentMessages.push(JSON.parse(options.body));
+      return Response.json({ ok: true, result: { message_id: sentMessages.length } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  const env = { DB: db, TELEGRAM_BOT_TOKEN: '12345:MOCK_TOKEN_SECRET' };
+
+  try {
+    await handleTelegramUpdate({
+      update_id: 200,
+      callback_query: {
+        id: 'watchlist-add',
+        from: { id: 101, first_name: 'Owner' },
+        data: 'watchlist_add',
+      },
+    }, env);
+    assert.match(sentMessages[0].text, /Enter a supported trading symbol/);
+
+    await handleTelegramUpdate({
+      update_id: 201,
+      message: {
+        message_id: 201,
+        from: { id: 101, is_bot: false, first_name: 'Owner' },
+        chat: { id: 101, type: 'private' },
+        text: 'BTCUSDT',
+        date: 1699000000,
+      },
+    }, env);
+    assert.equal(db.tables.user_watchlist.get('101:BTCUSDT').is_active, 1);
+    assert.equal(db.tables.user_watchlist.get('101:BTCUSDT').asset_class, 'CRYPTO');
+    assert.ok(sentMessages.at(-1).reply_markup.inline_keyboard.some(
+      row => row.some(button => button.text === 'Add Pair')
+    ));
+    assert.ok(sentMessages.at(-1).reply_markup.inline_keyboard.some(
+      row => row.some(button => button.callback_data === 'watchlist_analyze_BTCUSDT')
+    ));
+
+    await handleTelegramUpdate({
+      update_id: 202,
+      callback_query: {
+        id: 'other-user-remove',
+        from: { id: 202, first_name: 'Other' },
+        data: 'watchlist_remove_BTCUSDT',
+      },
+    }, env);
+    assert.equal(db.tables.user_watchlist.get('101:BTCUSDT').is_active, 1);
+
+    await handleTelegramUpdate({
+      update_id: 203,
+      callback_query: {
+        id: 'owner-remove-menu',
+        from: { id: 101, first_name: 'Owner' },
+        data: 'watchlist_remove_menu',
+      },
+    }, env);
+    const removalMenu = sentMessages.filter(message => message.reply_markup?.inline_keyboard
+      .some(row => row.some(button => button.callback_data === 'watchlist_remove_BTCUSDT'))).at(-1);
+    assert.ok(removalMenu?.reply_markup.inline_keyboard.some(
+      row => row.some(button => button.callback_data === 'watchlist_remove_BTCUSDT')
+    ));
+
+    await handleTelegramUpdate({
+      update_id: 204,
+      callback_query: {
+        id: 'owner-remove',
+        from: { id: 101, first_name: 'Owner' },
+        data: 'watchlist_remove_BTCUSDT',
+      },
+    }, env);
+    assert.equal(db.tables.user_watchlist.get('101:BTCUSDT').is_active, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Telegram watchlist - Rejects an unlisted metal quote without converting it', async () => {
+  const db = new MockD1();
+  const originalFetch = globalThis.fetch;
+  const replies = [];
+  globalThis.fetch = async (url, options) => {
+    if (url.startsWith('https://api.telegram.org/')) {
+      replies.push(JSON.parse(options.body));
+      return Response.json({ ok: true, result: { message_id: replies.length } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  const env = { DB: db, TELEGRAM_BOT_TOKEN: '12345:MOCK_TOKEN_SECRET' };
+
+  try {
+    await handleTelegramUpdate({
+      update_id: 209,
+      callback_query: {
+        id: 'watchlist-add-unsupported',
+        from: { id: 505, first_name: 'Trader' },
+        data: 'watchlist_add',
+      },
+    }, env);
+    await handleTelegramUpdate({
+      update_id: 210,
+      message: {
+        message_id: 210,
+        from: { id: 505, is_bot: false, first_name: 'Trader' },
+        chat: { id: 505, type: 'private' },
+        text: 'XAUUSDT',
+        date: 1699000000,
+      },
+    }, env);
+
+    assert.equal(db.tables.user_watchlist.size, 0);
+    assert.match(replies.at(-1).text, /XAUUSD is a separate quote pair.*will not substitute/i);
+    assert.ok(db.tables.user_settings.has('505:telegram_pending_flow'));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Telegram watchlist - Selecting a saved pair invokes the existing ICT analysis pipeline', async () => {
+  const db = new MockD1();
+  db.tables.user_watchlist.set('303:BTCUSDT', {
+    user_id: '303', symbol: 'BTCUSDT', asset_class: 'CRYPTO', is_active: 1,
+  });
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push(url);
+    if (url.startsWith('https://api.binance.com/api/v3/klines')) {
+      return Response.json(flatBinanceCandles(new URL(url).searchParams.get('interval')));
+    }
+    if (url.startsWith('https://api.telegram.org/')) {
+      return Response.json({ ok: true, result: { message_id: 1 } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  };
+
+  try {
+    await handleTelegramUpdate({
+      update_id: 205,
+      callback_query: {
+        id: 'analyze-saved-pair',
+        from: { id: 303, first_name: 'Trader' },
+        data: 'watchlist_analyze_BTCUSDT',
+      },
+    }, { DB: db, TELEGRAM_BOT_TOKEN: '12345:MOCK_TOKEN_SECRET' });
+    assert.equal(requests.filter(url => url.includes('/api/v3/klines')).length, 5);
+    assert.ok(requests.some(url => url.startsWith('https://api.telegram.org/')
+      && url.endsWith('/sendMessage')));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Telegram /price - Prompts for a symbol, sends a quote and refreshes it', async () => {
+  const db = new MockD1();
+  const originalFetch = globalThis.fetch;
+  const sentMessages = [];
+  let yahooRequests = 0;
+  globalThis.fetch = async (url, options) => {
+    if (url.startsWith('https://api.telegram.org/')) {
+      sentMessages.push(JSON.parse(options.body));
+      return Response.json({ ok: true, result: { message_id: sentMessages.length } });
+    }
+    if (url.startsWith('https://query1.finance.yahoo.com/')) {
+      yahooRequests += 1;
+      return Response.json({
+        chart: {
+          result: [{
+            meta: {
+              regularMarketPrice: 1.08,
+              regularMarketTime: 1730000000,
+              regularMarketDayHigh: 1.09,
+              regularMarketDayLow: 1.07,
+            },
+          }],
+        },
+      });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  const env = { DB: db, TELEGRAM_BOT_TOKEN: '12345:MOCK_TOKEN_SECRET' };
+
+  try {
+    await handleTelegramUpdate({
+      update_id: 206,
+      message: {
+        message_id: 206,
+        from: { id: 404, is_bot: false, first_name: 'Trader' },
+        chat: { id: 404, type: 'private' },
+        text: '/price',
+        date: 1699000000,
+      },
+    }, env);
+    assert.match(sentMessages[0].text, /Which trading pair would you like to check/);
+
+    await handleTelegramUpdate({
+      update_id: 207,
+      message: {
+        message_id: 207,
+        from: { id: 404, is_bot: false, first_name: 'Trader' },
+        chat: { id: 404, type: 'private' },
+        text: 'EURUSD',
+        date: 1699000000,
+      },
+    }, env);
+    assert.match(sentMessages[1].text, /LIVE MARKET PRICE/);
+    assert.match(sentMessages[1].text, /Instrument: <code>EURUSD<\/code>/);
+    assert.match(sentMessages[1].text, /Price: <b>1\.08 USD<\/b>/);
+    assert.match(sentMessages[1].text, /Provider: Yahoo FX/);
+    assert.equal(sentMessages[1].reply_markup.inline_keyboard[0][0].text, 'Refresh Price');
+
+    await handleTelegramUpdate({
+      update_id: 208,
+      callback_query: {
+        id: 'refresh-price',
+        from: { id: 404, first_name: 'Trader' },
+        data: 'price_refresh_EURUSD',
+      },
+    }, env);
+    assert.equal(yahooRequests, 2);
+    assert.equal(sentMessages.filter(message => message.text.includes('LIVE MARKET PRICE')).length, 2);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -33,11 +33,12 @@ export function analyzeIctCandles(
   timeframes: Record<'4h' | '1h' | '15m' | '5m' | '1m', AnalysisCandle[]>
 ): IctAnalysisResult;
 
-export function fetchIctAnalysis(symbol: string): Promise<IctAnalysisResult>;
+export function fetchIctAnalysis(symbol: string, apiKey?: string): Promise<IctAnalysisResult>;
 
 export function fetchHistoricalCandles(
   symbol: string,
-  interval: AnalysisTimeframe
+  interval: AnalysisTimeframe,
+  apiKey?: string
 ): Promise<AnalysisCandle[]>;
 
 export function formatIctOpportunity(symbol: string, opportunity: IctOpportunity): string;

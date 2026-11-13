@@ -11,6 +11,17 @@ const LEFT_BARS = 2;
 const RIGHT_BARS = 2;
 const MAX_SETUP_CANDLES = 50;
 const MIN_CANDLE_COUNT = 9;
+const TWELVE_DATA_METALS = {
+  XAUUSD: 'XAU/USD',
+  XAGUSD: 'XAG/USD',
+};
+const TWELVE_DATA_INTERVALS = {
+  '1m': '1min',
+  '5m': '5min',
+  '15m': '15min',
+  '1h': '1h',
+  '4h': '4h',
+};
 
 export class IctAnalysisError extends Error {
   constructor(message) {
@@ -293,7 +304,9 @@ export function analyzeIctCandles(timeframes) {
       ],
     });
   }
-  return { opportunities: opportunities.slice(0, 2) };
+  // The existing pipeline orders 15M setups newest-first and selects the
+  // newest valid 5M confirmation and 1M refinement for each setup.
+  return { opportunities: opportunities.slice(0, 1) };
 }
 
 function normalizeSymbol(symbol) {
@@ -309,6 +322,7 @@ function sanitizeProviderDescription(value) {
   if (typeof value !== 'string' || value.length === 0) return '';
   return value
     .replace(/https?:\/\/\S+/gi, '[URL]')
+    .replace(/\b(api[_-]?key|apikey|token|secret)\s*[:=]\s*["']?[^,\s"'&]+/gi, '$1=[redacted]')
     .replace(/\b\d{5,}:[A-Za-z0-9_-]{20,}\b/g, '[redacted]')
     .replace(/[\r\n\t]+/g, ' ')
     .slice(0, 160);
@@ -333,7 +347,7 @@ async function responseFailure(response) {
   }
 }
 
-function normalizeCandleRows(rows, mapper, intervalMs, now) {
+function normalizeCandleRows(rows, mapper, intervalMs, now, allowMarketClosures = false) {
   if (!Array.isArray(rows) || rows.length === 0) {
     return { candles: null, description: 'malformed or empty candle payload' };
   }
@@ -372,7 +386,12 @@ function normalizeCandleRows(rows, mapper, intervalMs, now) {
   for (let index = 1; index < candles.length; index += 1) {
     const difference = candles[index].timestamp - candles[index - 1].timestamp;
     if (difference <= 0) return { candles: null, description: 'duplicate or unordered candle timestamps' };
-    if (difference !== intervalMs) return { candles: null, description: 'incomplete candle sequence (time gap)' };
+    const closedMarketGap = allowMarketClosures &&
+      difference >= 24 * 60 * 60 * 1000 &&
+      difference % intervalMs === 0;
+    if (difference !== intervalMs && !closedMarketGap) {
+      return { candles: null, description: 'incomplete candle sequence (time gap)' };
+    }
   }
   if (candles.length < MIN_CANDLE_COUNT) {
     return { candles: null, description: `insufficient closed candles (${candles.length}/${MIN_CANDLE_COUNT})` };
@@ -392,11 +411,113 @@ function extractKrakenRows(payload) {
     : { rows: null, description: 'missing OHLC result array' };
 }
 
-export async function fetchHistoricalCandles(requestedSymbol, interval) {
+function parseTwelveDataTimestamp(value) {
+  if (typeof value !== 'string') return NaN;
+  const timestamp = /(?:Z|[+-]\d{2}:\d{2})$/i.test(value)
+    ? Date.parse(value)
+    : Date.parse(`${value.replace(' ', 'T')}Z`);
+  return Number.isFinite(timestamp) ? timestamp : NaN;
+}
+
+async function fetchTwelveDataMetalCandles(symbol, interval, apiKey) {
+  const requestedSymbol = symbol;
+  const providerSymbol = TWELVE_DATA_METALS[symbol];
+  if (!apiKey) {
+    const description = 'TWELVE_DATA_API_KEY is not configured';
+    console.warn('[ICT analysis] Candle provider failed', {
+      provider: 'Twelve Data',
+      symbol: requestedSymbol,
+      interval,
+      description,
+    });
+    throw new IctAnalysisError(
+      `Unable to retrieve ${interval} candles for ${symbol}; Twelve Data failed (${description}).`
+    );
+  }
+
+  try {
+    const url = new URL('https://api.twelvedata.com/time_series');
+    url.searchParams.set('symbol', providerSymbol);
+    url.searchParams.set('interval', TWELVE_DATA_INTERVALS[interval]);
+    url.searchParams.set('outputsize', '150');
+    url.searchParams.set('timezone', 'UTC');
+    url.searchParams.set('apikey', apiKey);
+    const response = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
+    if (!response.ok) {
+      throw new Error(await responseFailure(response));
+    }
+    if (!(response.headers.get('content-type') || '').toLowerCase().includes('json')) {
+      throw new Error(`HTTP ${response.status} non-JSON response`);
+    }
+
+    const payload = await response.json().catch(() => null);
+    if (!payload || payload.status === 'error' || !Array.isArray(payload.values)) {
+      const description = sanitizeProviderDescription(
+        payload?.message || payload?.code || 'malformed or empty time-series response'
+      );
+      throw new Error(description || 'malformed or empty time-series response');
+    }
+    if (payload.meta?.symbol && payload.meta.symbol !== providerSymbol) {
+      throw new Error(`Unexpected instrument returned (${sanitizeProviderDescription(payload.meta.symbol)})`);
+    }
+
+    const intervalMs = INTERVAL_MINUTES[interval] * 60_000;
+    const normalized = normalizeCandleRows(
+      payload.values,
+      row => row && typeof row === 'object'
+        ? {
+          timestamp: parseTwelveDataTimestamp(row.datetime),
+          open: Number(row.open),
+          high: Number(row.high),
+          low: Number(row.low),
+          close: Number(row.close),
+          volume: Number(row.volume ?? 0),
+        }
+        : null,
+      intervalMs,
+      Date.now(),
+      true
+    );
+    if (!normalized.candles) throw new Error(normalized.description);
+
+    console.info('[ICT analysis] Candle provider succeeded', {
+      provider: 'Twelve Data',
+      symbol: requestedSymbol,
+      interval,
+      candleCount: normalized.candles.length,
+    });
+    return normalized.candles;
+  } catch (error) {
+    const description = sanitizeProviderDescription(
+      error instanceof Error ? error.message : 'request failed'
+    ) || 'request failed';
+    console.warn('[ICT analysis] Candle provider failed', {
+      provider: 'Twelve Data',
+      symbol: requestedSymbol,
+      interval,
+      description,
+    });
+    throw new IctAnalysisError(
+      `Unable to retrieve ${interval} candles for ${symbol}; Twelve Data failed (${description}).`
+    );
+  }
+}
+
+export async function fetchHistoricalCandles(requestedSymbol, interval, apiKey) {
   if (!INTERVALS.includes(interval)) {
     throw new IctAnalysisError(`Unsupported analysis timeframe: ${interval}.`);
   }
   const symbol = normalizeSymbol(requestedSymbol);
+  if (symbol === 'XAUUSDT') {
+    const description = 'No verified XAU/USDT historical listing; XAU/USD is a separate instrument';
+    console.warn('[ICT analysis] Unsupported instrument', { symbol, description });
+    throw new IctAnalysisError(
+      `Unsupported instrument ${symbol}: ${description}.`
+    );
+  }
+  if (TWELVE_DATA_METALS[symbol]) {
+    return fetchTwelveDataMetalCandles(symbol, interval, apiKey);
+  }
   const intervalMinutes = INTERVAL_MINUTES[interval];
   const intervalMs = intervalMinutes * 60_000;
   const now = Date.now();
@@ -572,10 +693,10 @@ export async function fetchHistoricalCandles(requestedSymbol, interval) {
   );
 }
 
-export async function fetchIctAnalysis(symbol) {
+export async function fetchIctAnalysis(symbol, apiKey) {
   const entries = await Promise.all(INTERVALS.map(async (interval) => [
     interval,
-    await fetchHistoricalCandles(symbol, interval),
+    await fetchHistoricalCandles(symbol, interval, apiKey),
   ]));
   const candles = Object.fromEntries(entries);
   return analyzeIctCandles(candles);

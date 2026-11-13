@@ -58,7 +58,13 @@ export async function handleDashboardRequest(request, env, hashDashboardToken) {
       const nowIso = new Date().toISOString();
       const tokenHash = await hashDashboardToken(token);
       const tokenRecord = await env.DB.prepare(
-        'UPDATE dashboard_auth_tokens SET is_used = 1 WHERE token_hash = ? AND is_used = 0 AND expires_at > ? RETURNING user_id'
+        `UPDATE dashboard_auth_tokens SET is_used = 1
+         WHERE token_hash = ? AND is_used = 0 AND expires_at > ?
+           AND EXISTS (
+             SELECT 1 FROM users
+             WHERE users.user_id = dashboard_auth_tokens.user_id AND users.status = 'ACTIVE'
+           )
+         RETURNING user_id`
       ).bind(tokenHash, nowIso).first();
 
       if (!tokenRecord) {
@@ -88,7 +94,9 @@ export async function handleDashboardRequest(request, env, hashDashboardToken) {
 
     const nowIso = new Date().toISOString();
     const session = await env.DB.prepare(
-      'SELECT * FROM dashboard_sessions WHERE session_id = ? AND expires_at > ?'
+      `SELECT s.user_id FROM dashboard_sessions s
+       JOIN users u ON u.user_id = s.user_id
+       WHERE s.session_id = ? AND s.expires_at > ? AND u.status = 'ACTIVE'`
     ).bind(sessionId, nowIso).first();
     if (!session) return jsonResponse({ error: 'Session expired or invalid' }, 401);
 

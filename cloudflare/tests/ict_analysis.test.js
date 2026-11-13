@@ -247,6 +247,116 @@ test('ICT candle retrieval - Falls back from Binance and Coinbase failures and r
   }
 });
 
+test('ICT candle retrieval - Maps verified gold and silver spot pairs across all supported intervals', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  const intervalMap = {
+    '1m': ['1min', 60_000],
+    '5m': ['5min', 300_000],
+    '15m': ['15min', 900_000],
+    '1h': ['1h', 3_600_000],
+    '4h': ['4h', 14_400_000],
+  };
+  globalThis.fetch = async url => {
+    requests.push(url);
+    const requestUrl = new URL(url);
+    const [, intervalMs] = Object.values(intervalMap)
+      .find(([providerInterval]) => providerInterval === requestUrl.searchParams.get('interval'));
+    const bucket = Math.floor(Date.now() / intervalMs) * intervalMs;
+    const values = Array.from({ length: 10 }, (_, index) => {
+      const timestamp = bucket - (10 - index) * intervalMs;
+      return {
+        datetime: new Date(timestamp).toISOString().slice(0, 19).replace('T', ' '),
+        open: '2300',
+        high: '2310',
+        low: '2290',
+        close: '2305',
+      };
+    }).reverse();
+    return Response.json({
+      meta: { symbol: requestUrl.searchParams.get('symbol') },
+      values,
+    });
+  };
+
+  try {
+    for (const [symbol, providerSymbol] of [['XAUUSD', 'XAU/USD'], ['XAGUSD', 'XAG/USD']]) {
+      for (const [interval, [providerInterval]] of Object.entries(intervalMap)) {
+        const candles = await fetchHistoricalCandles(symbol, interval, 'mock-private-api-key');
+        const url = new URL(requests.at(-1));
+        assert.equal(url.pathname, '/time_series');
+        assert.equal(url.searchParams.get('symbol'), providerSymbol);
+        assert.equal(url.searchParams.get('interval'), providerInterval);
+        assert.equal(url.searchParams.get('outputsize'), '150');
+        assert.equal(url.searchParams.get('timezone'), 'UTC');
+        assert.equal(url.searchParams.get('apikey'), 'mock-private-api-key');
+        assert.equal(candles.length, 10);
+        assert.deepEqual(Object.keys(candles[0]), [
+          'timestamp', 'open', 'high', 'low', 'close', 'volume',
+        ]);
+        assert.equal(candles[0].volume, 0);
+        assert.ok(candles.every((candle, index) => (
+          index === 0 || candle.timestamp > candles[index - 1].timestamp
+        )));
+      }
+    }
+    assert.equal(requests.length, 10);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('ICT candle retrieval - Reports unsupported XAUUSDT and does not fall back to crypto providers', async () => {
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = async () => {
+    requests += 1;
+    throw new Error('Unsupported symbol must not make a provider request');
+  };
+  try {
+    await assert.rejects(
+      fetchHistoricalCandles('XAUUSDT', '4h', 'mock-private-api-key'),
+      /Unsupported instrument XAUUSDT.*XAU\/USD is a separate instrument/
+    );
+    assert.equal(requests, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('ICT candle retrieval - Requires the Twelve Data key and reports malformed metal responses safely', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const logs = [];
+  let requestCount = 0;
+  globalThis.fetch = async () => {
+    requestCount += 1;
+    return Response.json({
+      status: 'error',
+      message: 'Invalid apiKey=do-not-log-this',
+    });
+  };
+  console.warn = (...args) => logs.push(args);
+  try {
+    await assert.rejects(
+      fetchHistoricalCandles('XAGUSD', '1m'),
+      /Twelve Data failed \(TWELVE_DATA_API_KEY is not configured\)/
+    );
+    assert.equal(requestCount, 0);
+
+    await assert.rejects(
+      fetchHistoricalCandles('XAGUSD', '1m', 'secret-api-key'),
+      /Twelve Data failed \(Invalid apiKey=\[redacted\]\)/
+    );
+    assert.equal(requestCount, 1);
+    assert.equal(JSON.stringify(logs).includes('secret-api-key'), false);
+    assert.equal(JSON.stringify(logs).includes('do-not-log-this'), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
 test('ICT candle retrieval - Rejects malformed provider rows', async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;

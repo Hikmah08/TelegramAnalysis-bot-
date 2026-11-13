@@ -6,16 +6,19 @@ This directory houses the serverless cloud deployment of the ICT/SMC Trading Ana
 
 - **Compute**: Cloudflare Workers (TypeScript / V8)
   - `src/index.ts`: Worker entry point, REST API, health check, session verification.
-  - `src/telegram.ts`: Telegram webhook endpoint (`POST /telegram/webhook`) handling user registration, `/start`, `/help`, `/menu`, balance, positions, history, watchlist, dashboard login, full multi-timeframe ICT/SMC analysis (`/analyze`), and interactive trade management.
+  - `src/telegram.ts`: Telegram webhook endpoint (`POST /telegram/webhook`) handling user registration, access checks, minimal command activity, `/start`, `/help`, `/menu`, balance, positions, history, interactive watchlist, live `/price`, dashboard login, full multi-timeframe ICT/SMC analysis (`/analyze`), and interactive trade management.
+  - `src/admin.js`: Separately authenticated `/admin` operations console and privacy-limited admin APIs. Admin API access requires an active `ADMIN` user whose Telegram ID is also present in `TELEGRAM_ADMIN_IDS`.
   - `src/monitor.ts`: Scheduled position monitoring executed via Cron Trigger (`* * * * *`).
   - `src/lifecycle.ts`: Paper trading P&L, R-multiple, target progress, and conservative SL/TP exit evaluations.
   - `src/strategy.ts`: Port of ICT/SMC swing identification, liquidity sweep detection, and FVG detection.
-  - `src/market_data.ts`: Live price adapters for Binance Public API and Yahoo Finance.
-  - `src/ict_analysis.js`: Multi-timeframe candle pipeline (Binance, Coinbase Exchange, then Kraken) for 4H, 1H, 15M, 5M, and 1M analysis. Kraken symbols use exchange-specific names (for example BTCUSDT maps to XBTUSDT); provider candles are validated, closed, ordered, and normalized before analysis. Coinbase's Exchange API does not support 4H candle granularity, so 4H falls through to Kraken.
+  - `src/market_data.ts`: Live price adapters for Binance, Coinbase, Yahoo Finance, and Twelve Data spot metals.
+  - `src/ict_analysis.js`: Multi-timeframe candle pipeline (Binance, Coinbase Exchange, then Kraken for existing crypto/forex instruments; Twelve Data for catalogued XAU/USD and XAG/USD spot metals) for 4H, 1H, 15M, 5M, and 1M analysis. Kraken symbols use exchange-specific names (for example BTCUSDT maps to XBTUSDT); provider candles are validated, closed, ordered, and normalized before analysis. XAU/USDT is not substituted with XAU/USD and is reported as unsupported because Twelve Data's symbol search does not list that pair.
 - **Database**: Cloudflare D1 (Serverless SQLite)
   - Managed via versioned migrations in `migrations/` and `schema.sql`.
-- **Frontend**: Cloudflare Pages / Worker Site
-  - Mobile & desktop responsive HTML/Tailwind dashboard in `public/index.html`.
+- **Frontend**: Cloudflare Workers static assets
+  - Mobile & desktop personal trading dashboard in `public/index.html`.
+  - Separate operational admin console in `public/admin.html`; it exposes user metadata and usage only, never trading records.
+- **Admin audit data**: `migrations/0002_admin_control.sql` adds the minimal command/user activity feed and administrator action audit log. It does not alter existing trading tables.
 
 ---
 
@@ -41,9 +44,13 @@ wrangler d1 create trading-bot-db
 *Copy the `database_id` output by Wrangler and paste it into `wrangler.toml` under `[[d1_databases]]`.*
 
 ### 4. Apply Database Migrations
-Execute the initial schema migration on your live D1 database:
+For a new database, apply the initial schema:
 ```bash
 wrangler d1 execute trading-bot-db --remote --file=./schema.sql
+```
+For an existing database, apply the versioned admin migration without resetting user data:
+```bash
+wrangler d1 migrations apply trading-bot-db --remote
 ```
 
 ### 5. Set Production Secrets
@@ -53,10 +60,14 @@ wrangler secret put TELEGRAM_BOT_TOKEN
 wrangler secret put TELEGRAM_ADMIN_IDS
 wrangler secret put TELEGRAM_WEBHOOK_SECRET
 wrangler secret put DASHBOARD_SECRET_KEY
+wrangler secret put TWELVE_DATA_API_KEY
 ```
 `TELEGRAM_WEBHOOK_SECRET` is required. Keep its value available for the manual
 webhook registration step below; the Worker rejects webhook requests when the
 secret is missing or does not match.
+Configure `TWELVE_DATA_API_KEY` as a Wrangler secret to enable verified
+historical and latest spot prices for XAU/USD and XAG/USD. The bot does not
+silently convert XAU/USDT to XAU/USD.
 
 ### 6. Run Automated Tests Locally
 Verify the TypeScript and JavaScript modules pass all unit tests:
@@ -88,3 +99,4 @@ curl -X POST "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook" \
 - Health check: `curl https://trading-bot-worker.<subdomain>.workers.dev/health`
 - Telegram bot: Send `/start` in your bot chat.
 - Dashboard: Send `/dashboard` in Telegram and open the returned login link.
+- Admin console: Send `/admin` from an ID listed in `TELEGRAM_ADMIN_IDS` and open its one-time link. Admin sessions and APIs also verify the account's active `ADMIN` role on the server.
